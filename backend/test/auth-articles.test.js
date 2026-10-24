@@ -4,19 +4,25 @@ const express = require('express');
 const { store } = require('../src/data/store');
 const authRoutes = require('../src/routes/auth');
 const articleRoutes = require('../src/routes/articles');
+const communityRoutes = require('../src/routes/community');
 
 test('reader and author signup, login, and article permissions work end to end', async () => {
   const originalUsers = store.users;
   const originalArticles = store.articles;
   const originalAuditLogs = store.auditLogs;
+  const originalEngagementEvents = store.engagementEvents;
+  const originalReadingHistory = store.readingHistory;
   store.users = [...originalUsers];
   store.articles = [...originalArticles];
   store.auditLogs = [...originalAuditLogs];
+  store.engagementEvents = [...originalEngagementEvents];
+  store.readingHistory = [...originalReadingHistory];
 
   const app = express();
   app.use(express.json());
   app.use('/api/auth', authRoutes);
   app.use('/api/articles', articleRoutes);
+  app.use('/api', communityRoutes);
   const server = app.listen(0, '127.0.0.1');
   await new Promise((resolve, reject) => {
     server.once('listening', resolve);
@@ -71,6 +77,13 @@ test('reader and author signup, login, and article permissions work end to end',
       summary: 'A test story summary.',
       content: 'This is a valid article body with enough words to satisfy the publishing system validation.',
       tags: ['test'],
+      quiz: {
+        questions: [{
+          prompt: 'Which option is correct?',
+          options: ['First answer', 'Second answer'],
+          correctOptionIndex: 1,
+        }],
+      },
     };
     const readerCreate = await request('/articles', {
       method: 'POST',
@@ -91,6 +104,17 @@ test('reader and author signup, login, and article permissions work end to end',
     });
     assert.equal(readerDelete.status, 403);
 
+    const invalidQuiz = await request('/articles', {
+      method: 'POST',
+      token: authorLogin.payload.token,
+      body: {
+        title: 'An Invalid Quiz Article',
+        content: articleInput.content,
+        quiz: { questions: [{ prompt: 'Which option is correct?', options: ['Only one'], correctOptionIndex: 0 }] },
+      },
+    });
+    assert.equal(invalidQuiz.status, 400);
+
     const authorCreate = await request('/articles', {
       method: 'POST',
       token: authorLogin.payload.token,
@@ -98,6 +122,7 @@ test('reader and author signup, login, and article permissions work end to end',
     });
     assert.equal(authorCreate.status, 201);
     const articleId = authorCreate.payload.article.id;
+    assert.equal(authorCreate.payload.article.quiz.questions[0].correctOptionIndex, 1);
 
     const authorEdit = await request(`/articles/${articleId}`, {
       method: 'PUT',
@@ -113,6 +138,31 @@ test('reader and author signup, login, and article permissions work end to end',
     assert.equal(authorSubmit.status, 200);
     assert.equal(authorSubmit.payload.article.status, 'published');
 
+    const publicArticle = await request(`/articles/${articleId}`);
+    assert.deepEqual(publicArticle.payload.quiz.questions[0], {
+      prompt: 'Which option is correct?',
+      options: ['First answer', 'Second answer'],
+    });
+    const publishedArticles = await request('/articles?status=published');
+    assert.equal('correctOptionIndex' in publishedArticles.payload.items.find((item) => item.id === articleId).quiz.questions[0], false);
+    const searchResults = await request('/search?q=Editorial%20Test%20Story');
+    assert.equal('correctOptionIndex' in searchResults.payload.items.find((item) => item.id === articleId).quiz.questions[0], false);
+    const authorArticles = await request(`/authors/${authorSignup.payload.user.id}`);
+    assert.equal('correctOptionIndex' in authorArticles.payload.articles.find((item) => item.id === articleId).quiz.questions[0], false);
+
+    const invalidAttempt = await request(`/articles/${articleId}/quiz/attempt`, {
+      method: 'POST',
+      body: { answers: [9] },
+    });
+    assert.equal(invalidAttempt.status, 400);
+    const quizAttempt = await request(`/articles/${articleId}/quiz/attempt`, {
+      method: 'POST',
+      body: { answers: [1] },
+    });
+    assert.equal(quizAttempt.status, 200);
+    assert.equal(quizAttempt.payload.score, 1);
+    assert.equal(quizAttempt.payload.total, 1);
+
     const elevatedSignup = await request('/auth/signup', {
       method: 'POST',
       body: { name: 'Not Admin', email: 'not-admin@example.com', password: 'ReaderPass123!', role: 'admin' },
@@ -123,5 +173,7 @@ test('reader and author signup, login, and article permissions work end to end',
     store.users = originalUsers;
     store.articles = originalArticles;
     store.auditLogs = originalAuditLogs;
+    store.engagementEvents = originalEngagementEvents;
+    store.readingHistory = originalReadingHistory;
   }
 });

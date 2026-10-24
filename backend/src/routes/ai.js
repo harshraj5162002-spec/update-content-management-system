@@ -6,6 +6,7 @@ const { runAITool, generateGeminiAITool } = require('../services/aiService');
 const { getRelatedArticles } = require('../services/analytics');
 const { getArticleSummary } = require('../services/articleInsights');
 const { asyncHandler } = require('../middleware/asyncHandler');
+const { serializePublicArticle } = require('../services/articleSerialization');
 
 const router = express.Router();
 const supportedTools = new Set(['summary', 'summarizer', 'writing', 'improve', 'moderation', 'quality', 'topics', 'tags', 'title', 'grammar', 'related']);
@@ -32,7 +33,7 @@ router.post('/tools/:tool', requireAuth, asyncHandler(async (req, res) => {
       ? store.articles.find((item) => item.id === req.body.articleId)
       : article;
     if (!target.id) return res.status(400).json({ message: 'Provide an articleId or article content.' });
-    return res.json({ result: getRelatedArticles(target, store.articles), generatedBy: 'local relevance engine' });
+    return res.json({ result: getRelatedArticles(target, store.articles).map(serializePublicArticle), generatedBy: 'local relevance engine' });
   }
 
   if (aiProvider === 'local' && ['summary', 'summarizer'].includes(tool) && req.body.articleId) {

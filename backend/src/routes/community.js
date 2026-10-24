@@ -10,6 +10,7 @@ const { moderateContent } = require('../services/aiService');
 const { checkExternalLink } = require('../services/safeLinkCheck');
 const { recordAudit } = require('../services/audit');
 const { recordAbuse } = require('../services/trust');
+const { serializePublicArticle } = require('../services/articleSerialization');
 
 const router = express.Router();
 
@@ -40,12 +41,12 @@ function addNotification(userId, type, title) {
 
 router.get('/search', (req, res) => {
   const result = searchArticles(store.articles.filter((article) => article.status === 'published'), req.query, store.categories);
-  res.json(result);
+  res.json({ ...result, items: result.items.map(serializePublicArticle) });
 });
 
 router.get('/trending', (req, res) => {
   res.json({
-    items: getTrendingArticles(store.articles, new Date(), store.settings?.trendingWeights, store.engagementEvents),
+    items: getTrendingArticles(store.articles, new Date(), store.settings?.trendingWeights, store.engagementEvents).map(serializePublicArticle),
     generatedAt: new Date().toISOString(),
     scoring: 'Views, engagement velocity, engagement rate, and recency; explanations use measured article metrics.',
   });
@@ -53,7 +54,7 @@ router.get('/trending', (req, res) => {
 
 router.get('/recommendations', requireAuth, (req, res) => {
   const history = store.readingHistory.filter((item) => item.userId === req.user.id);
-  const items = getRecommendationsForUser(req.user, store.articles, store.categories, history, 4, req.user.recommendationFeedback || []);
+  const items = getRecommendationsForUser(req.user, store.articles, store.categories, history, 4, req.user.recommendationFeedback || []).map(serializePublicArticle);
   res.json({ items, generatedBy: 'local interest and engagement ranking' });
 });
 
@@ -186,7 +187,7 @@ router.get('/authors/:id', (req, res) => {
   res.json({
     author: visibleUser(author),
     stats: getAuthorStats(store.articles, author.id),
-    articles: store.articles.filter((article) => article.authorId === author.id && article.status === 'published'),
+    articles: store.articles.filter((article) => article.authorId === author.id && article.status === 'published').map(serializePublicArticle),
   });
 });
 
@@ -225,7 +226,8 @@ router.get('/me/bookmarks', requireAuth, (req, res) => {
   const bookmarks = store.bookmarks.filter((item) => item.userId === req.user.id);
   const items = bookmarks
     .map((bookmark) => store.articles.find((article) => article.id === bookmark.articleId && article.status === 'published'))
-    .filter(Boolean);
+    .filter(Boolean)
+    .map(serializePublicArticle);
   res.json({ items });
 });
 
@@ -235,7 +237,7 @@ router.get('/me/history', requireAuth, (req, res) => {
     .sort((a, b) => new Date(b.readAt) - new Date(a.readAt))
     .map((entry) => ({
       ...entry,
-      article: store.articles.find((article) => article.id === entry.articleId && article.status === 'published'),
+      article: serializePublicArticle(store.articles.find((article) => article.id === entry.articleId && article.status === 'published')),
     }))
     .filter((entry) => entry.article);
   res.json({ items });

@@ -7,6 +7,7 @@ Signal CMS is an existing React and Express content-management application with 
 - Public discovery with full-text search, categories, tags, authors, trending stories, and related articles
 - Reader accounts, bookmarks, reading history and progress, comments, notifications, and recommendation feedback
 - Author drafts, article submission, moderation status, freshness checks, and engagement analytics
+- Optional multiple-choice quizzes embedded in articles, with reader scoring
 - Admin moderation queue, reports and appeals, user roles and restrictions, taxonomy, audit events, and settings
 - JWT authentication, role-based authorization, rate limiting, and MongoDB persistence when configured
 - Deterministic local summaries, writing suggestions, content checks, and moderation that work without AI credentials
@@ -90,7 +91,7 @@ All endpoints are under `/api`.
 
 - Health and dashboard: `GET /health`, `GET /dashboard`
 - Authentication: `POST /auth/signup`, `POST /auth/login`, `GET /auth/me`
-- Articles: `GET /articles`, `GET /articles/home`, `GET /articles/:id`, `POST /articles`, `PUT /articles/:id`, `POST /articles/:id/submit`, `POST /articles/:id/engagement`
+- Articles: `GET /articles`, `GET /articles/home`, `GET /articles/:id`, `POST /articles`, `PUT /articles/:id`, `POST /articles/:id/submit`, `POST /articles/:id/engagement`, `POST /articles/:id/quiz/attempt`
 - Discovery: `GET /search`, `GET /trending`, `GET /recommendations`, `POST /recommendations/feedback`, plus categories, tags, and author profiles
 - Reader account: profile, bookmarks, history/progress, reading insights, notifications, comments, reports, and appeals
 - Author analytics and freshness: `GET /me/analytics`, `GET /me/freshness`, `POST /freshness/check`

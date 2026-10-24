@@ -448,10 +448,17 @@ function ArticlePage({ token }) {
   const [actionMessage, setActionMessage] = useState('');
   const [commentBody, setCommentBody] = useState('');
   const [readProgress, setReadProgress] = useState(0);
+  const [quizAnswers, setQuizAnswers] = useState([]);
+  const [quizResult, setQuizResult] = useState(null);
+  const [quizError, setQuizError] = useState('');
+  const [quizSubmitting, setQuizSubmitting] = useState(false);
 
   useEffect(() => {
     async function loadArticle() {
       try {
+        setQuizAnswers([]);
+        setQuizResult(null);
+        setQuizError('');
         const data = await apiRequest(`/articles/${id}`);
         setArticle(data);
         const commentData = await apiRequest(`/articles/${id}/comments`);
@@ -465,6 +472,23 @@ function ArticlePage({ token }) {
 
     loadArticle();
   }, [id]);
+
+  async function submitQuiz(event) {
+    event.preventDefault();
+    setQuizSubmitting(true);
+    setQuizError('');
+    try {
+      const result = await apiRequest(`/articles/${id}/quiz/attempt`, {
+        method: 'POST',
+        body: JSON.stringify({ answers: quizAnswers }),
+      });
+      setQuizResult(result);
+    } catch (submitError) {
+      setQuizError(submitError.message);
+    } finally {
+      setQuizSubmitting(false);
+    }
+  }
 
   useEffect(() => {
     if (!token || !article) return undefined;
@@ -553,6 +577,55 @@ function ArticlePage({ token }) {
             <span style={{ width: `${readProgress}%` }} />
           </div>
           <p>{article.content}</p>
+          {article.quiz?.questions?.length > 0 && (
+            <section className="article-quiz section-card">
+              <h2>Quick knowledge check</h2>
+              <p className="muted-copy">Choose one answer for each question to see your score.</p>
+              <form onSubmit={submitQuiz}>
+                {article.quiz.questions.map((question, questionIndex) => (
+                  <fieldset className="quiz-question" key={`${question.prompt}-${questionIndex}`}>
+                    <legend>{questionIndex + 1}. {question.prompt}</legend>
+                    {question.options.map((option, optionIndex) => (
+                      <label className="quiz-option" key={`${option}-${optionIndex}`}>
+                        <input
+                          type="radio"
+                          name={`quiz-${id}-${questionIndex}`}
+                          value={optionIndex}
+                          checked={quizAnswers[questionIndex] === optionIndex}
+                          onChange={() => {
+                            setQuizAnswers((current) => {
+                              const next = [...current];
+                              next[questionIndex] = optionIndex;
+                              return next;
+                            });
+                            setQuizResult(null);
+                          }}
+                          required
+                        />
+                        <span>{option}</span>
+                      </label>
+                    ))}
+                  </fieldset>
+                ))}
+                <button className="primary-button" type="submit" disabled={quizSubmitting}>
+                  {quizSubmitting ? 'Checking answers…' : 'Submit quiz'}
+                </button>
+              </form>
+              {quizError && <p className="error-panel inline-error" role="alert">{quizError}</p>}
+              {quizResult && (
+                <div className="quiz-result" role="status">
+                  <h3>Your score: {quizResult.score} / {quizResult.total}</h3>
+                  <ul>
+                    {quizResult.results.map((result, questionIndex) => (
+                      <li key={questionIndex}>
+                        {result.isCorrect ? 'Correct' : `Correct answer: ${article.quiz.questions[questionIndex].options[result.correctOptionIndex]}`}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </section>
+          )}
           <div className="takeaway-box">
             <h3>AI summary</h3>
             <p>{article.aiInsights?.summary}</p>
@@ -1103,7 +1176,7 @@ function AuthorArticlesPage({ user }) {
 function ArticleEditorPage({ user, token }) {
   const { id } = useParams();
   const navigate = useNavigate();
-  const [form, setForm] = useState({ title: '', summary: '', content: '', tags: '', categoryIds: [], coverImage: '' });
+  const [form, setForm] = useState({ title: '', summary: '', content: '', tags: '', categoryIds: [], coverImage: '', quiz: null });
   const [categories, setCategories] = useState([]);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -1112,7 +1185,7 @@ function ArticleEditorPage({ user, token }) {
   const [suggesting, setSuggesting] = useState(false);
   useEffect(() => {
     apiRequest('/categories').then(setCategories).catch((loadError) => setError(loadError.message));
-    if (id) apiRequest(`/articles/${id}`).then((article) => setForm({ title: article.title, summary: article.summary, content: article.content, tags: (article.tags || []).join(', '), categoryIds: article.categoryIds || [], coverImage: article.coverImage || '' })).catch((loadError) => setError(loadError.message));
+    if (id) apiRequest(`/articles/${id}`).then((article) => setForm({ title: article.title, summary: article.summary, content: article.content, tags: (article.tags || []).join(', '), categoryIds: article.categoryIds || [], coverImage: article.coverImage || '', quiz: article.quiz || null })).catch((loadError) => setError(loadError.message));
   }, [id]);
   if (!token) return <AccessNotice message="Sign in with an author or admin account to write articles." />;
   if (!user) return <div className="page-panel">Checking your account…</div>;
@@ -1138,6 +1211,35 @@ function ArticleEditorPage({ user, token }) {
       if (!id || submitForReview) navigate('/author/articles');
     } catch (saveError) { setError(saveError.message); }
     finally { setBusy(false); }
+  }
+
+  function updateQuizQuestion(questionIndex, update) {
+    setForm((current) => ({
+      ...current,
+      quiz: {
+        ...current.quiz,
+        questions: current.quiz.questions.map((question, index) => index === questionIndex ? update(question) : question),
+      },
+    }));
+  }
+
+  function addQuizQuestion() {
+    setForm((current) => ({
+      ...current,
+      quiz: {
+        questions: [
+          ...(current.quiz?.questions || []),
+          { prompt: '', options: ['', ''], correctOptionIndex: 0 },
+        ],
+      },
+    }));
+  }
+
+  function removeQuizQuestion(questionIndex) {
+    setForm((current) => {
+      const questions = current.quiz.questions.filter((_, index) => index !== questionIndex);
+      return { ...current, quiz: questions.length ? { questions } : null };
+    });
   }
 
   async function suggestImprovements() {
@@ -1169,6 +1271,53 @@ function ArticleEditorPage({ user, token }) {
       <label>Title<input value={form.title} maxLength={180} minLength={4} required onChange={(event) => setForm({ ...form, title: event.target.value })} /></label>
       <label>Summary<textarea value={form.summary} maxLength={500} onChange={(event) => setForm({ ...form, summary: event.target.value })} /></label>
       <label>Article content<textarea className="content-editor" value={form.content} minLength={30} maxLength={100000} required onChange={(event) => setForm({ ...form, content: event.target.value })} /></label>
+      <section className="quiz-editor">
+        <div className="section-header">
+          <div><span className="eyebrow">Optional</span><h2>Article quiz</h2><p className="muted-copy">Add up to 20 questions with 2–6 answer options each.</p></div>
+          <button type="button" className="secondary-button" disabled={(form.quiz?.questions.length || 0) >= 20} onClick={addQuizQuestion}>Add question</button>
+        </div>
+        {(form.quiz?.questions || []).map((question, questionIndex) => (
+          <fieldset className="quiz-editor-question" key={questionIndex}>
+            <div className="quiz-editor-heading">
+              <legend>Question {questionIndex + 1}</legend>
+              <button type="button" className="text-button" onClick={() => removeQuizQuestion(questionIndex)}>Remove question</button>
+            </div>
+            <label>Question text<textarea value={question.prompt} minLength={5} maxLength={300} required onChange={(event) => updateQuizQuestion(questionIndex, (current) => ({ ...current, prompt: event.target.value }))} /></label>
+            <div className="quiz-editor-options">
+              {question.options.map((option, optionIndex) => (
+                <div className="quiz-editor-option" key={optionIndex}>
+                  <label>
+                    <span>Option {optionIndex + 1}{question.correctOptionIndex === optionIndex ? ' · Correct answer' : ''}</span>
+                    <input value={option} maxLength={200} required onChange={(event) => updateQuizQuestion(questionIndex, (current) => ({ ...current, options: current.options.map((item, index) => index === optionIndex ? event.target.value : item) }))} />
+                  </label>
+                  <label className="correct-answer-choice">
+                    <input type="radio" name={`correct-answer-${questionIndex}`} checked={question.correctOptionIndex === optionIndex} onChange={() => updateQuizQuestion(questionIndex, (current) => ({ ...current, correctOptionIndex: optionIndex }))} />
+                    Correct
+                  </label>
+                  <button
+                    type="button"
+                    className="text-button"
+                    disabled={question.options.length <= 2}
+                    onClick={() => updateQuizQuestion(questionIndex, (current) => {
+                      const options = current.options.filter((_, index) => index !== optionIndex);
+                      const correctOptionIndex = current.correctOptionIndex === optionIndex
+                        ? Math.max(0, optionIndex - 1)
+                        : current.correctOptionIndex > optionIndex ? current.correctOptionIndex - 1 : current.correctOptionIndex;
+                      return { ...current, options, correctOptionIndex };
+                    })}
+                  >Remove option</button>
+                </div>
+              ))}
+            </div>
+            <button
+              type="button"
+              className="secondary-button"
+              disabled={question.options.length >= 6}
+              onClick={() => updateQuizQuestion(questionIndex, (current) => ({ ...current, options: [...current.options, ''] }))}
+            >Add option</button>
+          </fieldset>
+        ))}
+      </section>
       <label>Tags, comma separated<input value={form.tags} onChange={(event) => setForm({ ...form, tags: event.target.value })} placeholder="publishing, analytics, AI" /></label>
       <label>Cover image URL<input type="url" value={form.coverImage} onChange={(event) => setForm({ ...form, coverImage: event.target.value })} placeholder="https://…" /></label>
       <fieldset className="interest-fieldset"><legend>Categories</legend>{categories.map((category) => <label key={category.id} className="checkbox-label"><input type="checkbox" checked={form.categoryIds.includes(category.id)} onChange={(event) => setForm({ ...form, categoryIds: event.target.checked ? [...form.categoryIds, category.id] : form.categoryIds.filter((item) => item !== category.id) })} />{category.name}</label>)}</fieldset>

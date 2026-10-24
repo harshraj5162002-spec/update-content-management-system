@@ -14,6 +14,7 @@ const aiRoutes = require('./routes/ai');
 const communityRoutes = require('./routes/community');
 const { optionalAuth } = require('./middleware/auth');
 const { getTrendingArticles, getRecommendationsForUser, getTopicSnapshot } = require('./services/analytics');
+const { serializePublicArticle } = require('./services/articleSerialization');
 
 const app = express();
 
@@ -58,8 +59,8 @@ app.get('/api/dashboard', (req, res) => {
       drafts: store.articles.filter((article) => article.status === 'draft').length,
       authors: new Set(store.articles.map((article) => article.authorId)).size,
     },
-    trending,
-    recommendations,
+    trending: trending.map(serializePublicArticle),
+    recommendations: recommendations.map(serializePublicArticle),
     topics,
   });
 });

@@ -18,6 +18,8 @@ const {
 const { recordAudit } = require('../services/audit');
 const { asyncHandler } = require('../middleware/asyncHandler');
 const { recordAbuse } = require('../services/trust');
+const { isValidQuiz, normalizeQuiz } = require('../services/quiz');
+const { serializePublicArticle } = require('../services/articleSerialization');
 
 const router = express.Router();
 const articleStatuses = new Set(['draft', 'pending', 'published', 'quarantined', 'archived']);
@@ -54,14 +56,18 @@ router.get('/', (req, res) => {
 
   if (q || tag || sort) {
     const result = searchArticles(articles, { q, categoryId, tag, sort, page, limit }, store.categories);
-    return res.json(result);
+    return res.json({
+      ...result,
+      items: result.items.map((article) => canViewPrivateArticle(req.user, article) ? article : serializePublicArticle(article)),
+    });
   }
 
   const safePage = Math.max(1, Math.floor(Number(page) || 1));
   const safeLimit = Math.min(50, Math.max(1, Math.floor(Number(limit) || 12)));
   articles.sort((a, b) => new Date(b.updatedAt || b.createdAt) - new Date(a.updatedAt || a.createdAt));
   res.json({
-    items: articles.slice((safePage - 1) * safeLimit, safePage * safeLimit),
+    items: articles.slice((safePage - 1) * safeLimit, safePage * safeLimit)
+      .map((article) => canViewPrivateArticle(req.user, article) ? article : serializePublicArticle(article)),
     count: articles.length,
     page: safePage,
     pages: Math.ceil(articles.length / safeLimit),
@@ -75,9 +81,9 @@ router.get('/home', (req, res) => {
   const trending = getTrendingArticles(published, new Date(), weights, store.engagementEvents);
 
   res.json({
-    featured: published.slice(0, 3),
-    trending,
-    recommendations: getRecommendationsForUser(req.user || null, published, store.categories, history, 4, req.user?.recommendationFeedback || []),
+    featured: published.slice(0, 3).map(serializePublicArticle),
+    trending: trending.map(serializePublicArticle),
+    recommendations: getRecommendationsForUser(req.user || null, published, store.categories, history, 4, req.user?.recommendationFeedback || []).map(serializePublicArticle),
     categories: store.categories,
     topics: getTopicSnapshot(published, store.categories),
   });
@@ -152,13 +158,38 @@ router.get('/:id', (req, res) => {
   const author = publicAuthor(store.users.find((user) => user.id === article.authorId));
   const recommendations = getRelatedArticles(article, store.articles);
   res.json({
-    ...article,
+    ...(canViewPrivateArticle(req.user, article) ? article : serializePublicArticle(article)),
     author,
     aiInsights: getArticleSummary(article),
     suggestions: canViewPrivateArticle(req.user, article) ? suggestImprovements(article) : [],
-    related: recommendations,
+    related: recommendations.map(serializePublicArticle),
     recommendationReasons: recommendations.map(({ id, relatedReasons }) => ({ articleId: id, reasons: relatedReasons })),
   });
+});
+
+router.post('/:id/quiz/attempt', (req, res) => {
+  const article = store.articles.find((item) => item.id === req.params.id && item.status === 'published');
+  if (!article) return res.status(404).json({ message: 'Article not found.' });
+  if (!article.quiz?.questions?.length) return res.status(404).json({ message: 'This article does not have a quiz.' });
+
+  const { answers } = req.body || {};
+  if (
+    !Array.isArray(answers) ||
+    answers.length !== article.quiz.questions.length ||
+    answers.some((answer, index) =>
+      !Number.isInteger(answer) || answer < 0 || answer >= article.quiz.questions[index].options.length
+    )
+  ) {
+    return res.status(400).json({ message: 'Select one valid option for every quiz question.' });
+  }
+
+  const results = article.quiz.questions.map((question, index) => ({
+    selectedOptionIndex: answers[index],
+    correctOptionIndex: question.correctOptionIndex,
+    isCorrect: answers[index] === question.correctOptionIndex,
+  }));
+  const score = results.filter((result) => result.isCorrect).length;
+  res.json({ score, total: results.length, results });
 });
 
 router.post(
@@ -171,6 +202,7 @@ router.post(
     body('summary').optional().isString().isLength({ max: 500 }),
     body('tags').optional().isArray({ max: 20 }),
     body('categoryIds').optional().isArray({ max: 10 }),
+    body('quiz').optional({ nullable: true }).custom(isValidQuiz).withMessage('Quiz must contain 1-20 questions, each with 2-6 options and a valid correct answer.'),
   ],
   asyncHandler(async (req, res) => {
     const errors = validationResult(req);
@@ -206,6 +238,7 @@ router.post(
       authorId: req.user.id,
       status: 'draft',
       coverImage: req.body.coverImage || '',
+      quiz: normalizeQuiz(req.body.quiz),
       views: 0,
       likes: 0,
       shares: 0,
@@ -265,6 +298,7 @@ router.put('/:id', requireAuth, authorize('author', 'admin'), (req, res, next) =
   body('summary').optional().isString().isLength({ max: 500 }),
   body('tags').optional().isArray({ max: 20 }),
   body('categoryIds').optional().isArray({ max: 10 }),
+  body('quiz').optional({ nullable: true }).custom(isValidQuiz).withMessage('Quiz must contain 1-20 questions, each with 2-6 options and a valid correct answer.'),
 ], asyncHandler(async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
@@ -276,6 +310,7 @@ router.put('/:id', requireAuth, authorize('author', 'admin'), (req, res, next) =
   if (req.body.categoryIds !== undefined) article.categoryIds = req.body.categoryIds;
   if (req.body.tags !== undefined) article.tags = req.body.tags.map((tag) => String(tag).trim()).filter(Boolean);
   if (req.body.coverImage !== undefined) article.coverImage = req.body.coverImage;
+  if (req.body.quiz !== undefined) article.quiz = normalizeQuiz(req.body.quiz);
   if (req.body.status && req.user.role === 'admin' && articleStatuses.has(req.body.status)) article.status = req.body.status;
   article.moderation = moderateContent(article, store.settings?.moderationThresholds);
   article.updatedAt = new Date().toISOString();

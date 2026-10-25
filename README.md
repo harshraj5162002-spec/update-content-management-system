@@ -10,6 +10,8 @@ Signal CMS is an existing React and Express content-management application with 
 - Optional multiple-choice quizzes embedded in articles, with reader scoring
 - Admin moderation queue, reports and appeals, user roles and restrictions, taxonomy, audit events, and settings
 - JWT authentication, role-based authorization, rate limiting, and MongoDB persistence when configured
+- Optional Google and GitHub OAuth with one-time state, PKCE, and verified-email checks
+- Role-specific author, reader, and administrator analytics backed by recorded application data
 - Deterministic local summaries, writing suggestions, content checks, and moderation that work without AI credentials
 - Responsive React interface with an in-memory demo mode when MongoDB is unavailable
 
@@ -90,6 +92,9 @@ Backend (`backend/.env`):
 | `GEMINI_API_KEY` | Gemini API key; required when `AI_PROVIDER=gemini` |
 | `GEMINI_MODEL` | Gemini model name (default `gemini-2.5-flash`) |
 | `FRONTEND_URL` | Public frontend origin used to build password reset links |
+| `BACKEND_URL` | Public API origin used to construct OAuth callback URLs (default `http://localhost:5000`) |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Optional Google OAuth application credentials |
+| `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` | Optional GitHub OAuth application credentials |
 | `SMTP_HOST` | SMTP server hostname used to send password reset email |
 | `SMTP_PORT` | SMTP server port (default `587`) |
 | `SMTP_SECURE` | Set `true` for implicit TLS, otherwise `false` (typically STARTTLS on port 587) |
@@ -99,6 +104,19 @@ Backend (`backend/.env`):
 To enable Gemini, set `AI_PROVIDER=gemini` and add your key to `backend/.env`, then restart the backend. Keep the key server-side; do not add it to frontend environment variables. Set `AI_PROVIDER=local` to use the built-in deterministic tools instead. Related-article recommendations remain local.
 
 Password recovery is available from the login page. Configure the SMTP variables above in `backend/.env` and set `FRONTEND_URL` to the correct frontend origin before expecting email delivery. Reset tokens are cryptographically random, stored only as hashes, expire after one hour, and are single-use. Without SMTP host and sender configuration, the API reports that reset email is unavailable; it does not expose reset tokens or pretend to send email.
+
+### Google and GitHub sign-in
+
+OAuth buttons appear only for providers whose client ID and secret are configured in `backend/.env`. Create OAuth credentials with these backend callback URLs:
+
+- Google: `http://localhost:5000/api/auth/oauth/google/callback`
+- GitHub: `http://localhost:5000/api/auth/oauth/github/callback`
+
+For production or a different local host/port, use the corresponding public API URL instead. Set `BACKEND_URL` to that URL and configure the identical callback URL in each provider application. Set `FRONTEND_URL` to the frontend origin. Google OAuth should request the OpenID, email, and profile scopes; GitHub uses `read:user` and `user:email`. The app requires a verified provider email, binds one-time OAuth state to an HTTP-only, same-site cookie, verifies the PKCE challenge, and does not automatically link an OAuth identity to an existing account with the same email. Sign in with the existing account first; administrator accounts cannot be created through social signup. Never commit OAuth secrets.
+
+### Analytics and data coverage
+
+Author, reader, and admin analytics support 7-day, 30-day, and 90-day views. Graphs use stored engagement events, reading history, audit events, user creation timestamps, reports, appeals, and current article statuses. Older accounts without a recorded creation timestamp are not assigned fabricated signup dates. Reader time is explicitly an estimate from article word count and saved reading progress; the app does not currently time active reading sessions. Empty or untracked periods are shown as empty states rather than sample data.
 
 Frontend (`frontend/.env`):
 
@@ -132,7 +150,7 @@ node --test backend/test/*.test.js
 ## Current limitations
 
 - Gemini-backed tools require a valid API key and may be subject to Google API quotas; local deterministic tools remain available with `AI_PROVIDER=local`.
-- Email delivery depends on a configured SMTP provider; Google/GitHub OAuth and email verification are not implemented.
+- Password-reset email and Google/GitHub sign-in require credentials from the respective providers; provider-backed flows cannot be exercised without them.
 - External-link freshness checks are manual and run on demand; there is no scheduler.
 - Without MongoDB, demo data and changes exist only in process memory and are lost on restart.
 - Demo accounts and seed content are for local development; review credentials, secrets, CORS, and database configuration before deployment.

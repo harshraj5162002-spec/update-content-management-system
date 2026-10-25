@@ -7,8 +7,10 @@ const { store } = require('../data/store');
 const { saveRecord } = require('../data/persistence');
 const { recordAudit } = require('../services/audit');
 const { sendPasswordResetEmail, isEmailConfigured } = require('../services/email');
+const { isOAuthConfigured, createOAuthRequest, consumeOAuthState, matchesOAuthState, getOAuthIdentity, OAuthError } = require('../services/oauth');
 const { asyncHandler } = require('../middleware/asyncHandler');
 const { requireAuth, signToken, isActiveUser } = require('../middleware/auth');
+const { frontendUrl, nodeEnv } = require('../config/env');
 
 const router = express.Router();
 const resetRateLimit = rateLimit({
@@ -20,13 +22,16 @@ const resetRateLimit = rateLimit({
 });
 
 function publicUser(user) {
-  const {
-    passwordHash,
-    passwordResetTokenHash,
-    passwordResetTokenExpiresAt,
-    ...safeUser
-  } = user;
+  const safeUser = { ...user };
+  for (const field of ['passwordHash', 'passwordResetTokenHash', 'passwordResetTokenExpiresAt', 'oauthProviders']) {
+    delete safeUser[field];
+  }
   return safeUser;
+}
+
+function readCookie(req, name) {
+  const entry = (req.headers.cookie || '').split(';').map((cookie) => cookie.trim()).find((cookie) => cookie.startsWith(`${name}=`));
+  return entry ? entry.slice(name.length + 1) : '';
 }
 
 router.post(
@@ -52,7 +57,7 @@ router.post(
     }
 
     const user = {
-      id: `u-${require('node:crypto').randomUUID()}`,
+      id: `u-${crypto.randomUUID()}`,
       name: name.trim(),
       email,
       passwordHash: await bcrypt.hash(password, 10),
@@ -62,6 +67,7 @@ router.post(
       avatar: name.trim().slice(0, 2).toUpperCase(),
       preferences: [],
       reputation: 75,
+      createdAt: new Date().toISOString(),
     };
 
     store.users.push(user);
@@ -75,7 +81,11 @@ router.post(
 
 router.post(
   '/login',
-  [body('email').trim().isEmail().withMessage('A valid email is required.'), body('password').notEmpty().withMessage('Password is required.')],
+  [
+    body('email').trim().isEmail().withMessage('A valid email is required.'),
+    body('password').notEmpty().withMessage('Password is required.'),
+    body('role').isIn(['reader', 'author', 'admin']).withMessage('Choose the role assigned to your account.'),
+  ],
   asyncHandler(async (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
@@ -88,10 +98,13 @@ router.post(
     if (!user) {
       return res.status(401).json({ message: 'Invalid credentials.' });
     }
-
     const valid = await bcrypt.compare(password, user.passwordHash);
     if (!valid) {
       return res.status(401).json({ message: 'Invalid credentials.' });
+    }
+
+    if (user.role !== req.body.role) {
+      return res.status(403).json({ message: 'The selected role does not match this account.' });
     }
 
     if (!isActiveUser(user)) {
@@ -110,6 +123,108 @@ router.post(
     res.json({ token, user: publicUser(user) });
   })
 );
+
+router.get('/oauth/providers', (req, res) => {
+  res.json({ google: isOAuthConfigured('google'), github: isOAuthConfigured('github') });
+});
+
+router.get('/oauth/:provider', resetRateLimit, asyncHandler(async (req, res) => {
+  const { provider } = req.params;
+  if (!['google', 'github'].includes(provider)) return res.status(404).json({ message: 'OAuth provider not supported.' });
+  if (!isOAuthConfigured(provider)) return res.status(503).json({ message: `${provider} sign-in is not configured.` });
+  const role = ['reader', 'author', 'admin'].includes(req.query.role) ? req.query.role : '';
+  if (!role) return res.status(400).json({ message: 'Choose the role assigned to your account.' });
+  const request = createOAuthRequest(provider, role);
+  res.cookie(`signal_oauth_state_${provider}`, request.state, {
+    httpOnly: true,
+    secure: nodeEnv === 'production',
+    sameSite: 'lax',
+    maxAge: 10 * 60 * 1000,
+    path: `/api/auth/oauth/${provider}/callback`,
+  });
+  res.redirect(request.authorizationUrl);
+}));
+
+router.get('/oauth/:provider/callback', asyncHandler(async (req, res) => {
+  const { provider } = req.params;
+  const callbackUrl = new URL('/auth', frontendUrl);
+  const cookieName = `signal_oauth_state_${provider}`;
+  const queryState = typeof req.query.state === 'string' ? req.query.state : '';
+  if (!matchesOAuthState(queryState, readCookie(req, cookieName))) {
+    callbackUrl.searchParams.set('oauth_error', 'OAuth sign-in could not be verified. Please try again.');
+    return res.redirect(callbackUrl.toString());
+  }
+  const state = consumeOAuthState(queryState);
+  res.clearCookie(cookieName, {
+    httpOnly: true,
+    secure: nodeEnv === 'production',
+    sameSite: 'lax',
+    path: `/api/auth/oauth/${provider}/callback`,
+  });
+  if (!state || state.provider !== provider || !req.query.code || req.query.error) {
+    callbackUrl.searchParams.set('oauth_error', 'OAuth sign-in could not be verified. Please try again.');
+    return res.redirect(callbackUrl.toString());
+  }
+
+  try {
+    const identity = await getOAuthIdentity(provider, String(req.query.code), state.codeVerifier);
+    if (
+      typeof identity.subject !== 'string' || !identity.subject.trim() ||
+      typeof identity.email !== 'string' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(identity.email) ||
+      !identity.emailVerified
+    ) {
+      callbackUrl.searchParams.set('oauth_error', 'The provider did not supply a valid identity with a verified email address.');
+      return res.redirect(callbackUrl.toString());
+    }
+    const verifiedEmail = identity.email.trim().toLowerCase();
+    const displayName = typeof identity.name === 'string' ? identity.name.trim().slice(0, 80) : '';
+    let user = store.users.find((candidate) => candidate.oauthProviders?.[provider] === identity.subject);
+    if (user) {
+      if (user.role !== state.role) {
+        callbackUrl.searchParams.set('oauth_error', `This account uses the ${user.role} role. Choose that role to sign in.`);
+        return res.redirect(callbackUrl.toString());
+      }
+      if (!isActiveUser(user)) {
+        callbackUrl.searchParams.set('oauth_error', 'This account is not active.');
+        return res.redirect(callbackUrl.toString());
+      }
+    } else {
+      const existingEmail = store.users.find((candidate) => candidate.email.toLowerCase() === verifiedEmail);
+      if (existingEmail) {
+        callbackUrl.searchParams.set('oauth_error', 'An account already uses this email. Sign in with that account before linking a provider.');
+        return res.redirect(callbackUrl.toString());
+      }
+      if (state.role === 'admin') {
+        callbackUrl.searchParams.set('oauth_error', 'Administrator accounts cannot be created through social sign-in.');
+        return res.redirect(callbackUrl.toString());
+      }
+      user = {
+        id: `u-${crypto.randomUUID()}`,
+        name: displayName || verifiedEmail.split('@')[0],
+        email: verifiedEmail,
+        passwordHash: await bcrypt.hash(crypto.randomBytes(32).toString('hex'), 10),
+        oauthProviders: { [provider]: identity.subject },
+        role: state.role,
+        status: 'active',
+        bio: 'New member of Signal CMS',
+        avatar: (displayName || verifiedEmail).slice(0, 2).toUpperCase(),
+        preferences: [],
+        reputation: 75,
+        createdAt: new Date().toISOString(),
+      };
+      store.users.push(user);
+      await saveRecord('users', user);
+      await recordAudit({ actorId: user.id, action: 'auth.oauth.signup', targetType: 'user', targetId: user.id, outcome: provider });
+    }
+    const token = signToken(user);
+    callbackUrl.hash = new URLSearchParams({ token }).toString();
+    return res.redirect(callbackUrl.toString());
+  } catch (error) {
+    if (!(error instanceof OAuthError)) throw error;
+    callbackUrl.searchParams.set('oauth_error', error.message);
+    return res.redirect(callbackUrl.toString());
+  }
+}));
 
 router.post('/password-reset/request', resetRateLimit, [
   body('email').trim().isEmail().withMessage('A valid email is required.'),

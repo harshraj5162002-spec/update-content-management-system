@@ -27,6 +27,8 @@ const User = createModel('User', {
   preferences: { type: [String], default: [] },
   passwordResetTokenHash: { type: String, default: undefined },
   passwordResetTokenExpiresAt: { type: Date, default: undefined },
+  oauthProviders: { type: Schema.Types.Mixed, default: undefined },
+  createdAt: { type: Date, default: undefined },
 }, [[{ email: 1 }, { unique: true }], [{ role: 1, status: 1 }]]);
 
 const Article = createModel('Article', {

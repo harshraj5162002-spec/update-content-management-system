@@ -252,6 +252,13 @@ function getAuthorStats(articles, authorId, since = null, engagementEvents = [])
     publishedIds.has(event.articleId) && (!since || new Date(event.createdAt) >= since)
   );
   const countEvents = (type) => trackedEvents.filter((event) => event.type === type).length;
+  const engagementByArticle = new Map();
+  for (const event of trackedEvents) {
+    const metrics = engagementByArticle.get(event.articleId) || { views: 0, likes: 0, shares: 0, comments: 0 };
+    const metric = `${event.type}s`;
+    if (Object.hasOwn(metrics, metric)) metrics[metric] += 1;
+    engagementByArticle.set(event.articleId, metrics);
+  }
   const views = since ? countEvents('view') : published.reduce((sum, article) => sum + (article.views || 0), 0);
   const likes = since ? countEvents('like') : published.reduce((sum, article) => sum + (article.likes || 0), 0);
   const shares = since ? countEvents('share') : published.reduce((sum, article) => sum + (article.shares || 0), 0);
@@ -260,12 +267,23 @@ function getAuthorStats(articles, authorId, since = null, engagementEvents = [])
   return {
     totalArticles: authored.length,
     publishedArticles: published.length,
+    statusBreakdown: ['draft', 'pending', 'published', 'quarantined', 'rejected', 'changes_requested', 'archived']
+      .map((status) => ({ status, count: authored.filter((article) => article.status === status).length })),
     views,
     likes,
     shares,
     comments,
     engagementRate: Number(((likes + shares + comments) / Math.max(1, views) * 100).toFixed(2)),
-    topArticles: allPublished.slice().sort((a, b) => scoreArticle(b) - scoreArticle(a)).slice(0, 5),
+    topArticles: allPublished.slice().map((article) => ({
+      ...article,
+      analytics: engagementByArticle.get(article.id) || { views: 0, likes: 0, shares: 0, comments: 0 },
+    })).sort((a, b) => {
+      const aMetrics = a.analytics;
+      const bMetrics = b.analytics;
+      const aScore = aMetrics.views + aMetrics.likes * 2 + aMetrics.shares * 3 + aMetrics.comments * 3;
+      const bScore = bMetrics.views + bMetrics.likes * 2 + bMetrics.shares * 3 + bMetrics.comments * 3;
+      return bScore - aScore || scoreArticle(b) - scoreArticle(a);
+    }).slice(0, 5),
     topics: getTopicSnapshot(allPublished).keywords.slice(0, 5),
     activityTracked: !since || trackedEvents.length > 0,
     timeline: buildEngagementTimeline(allPublished, trackedEvents, timelineDays),

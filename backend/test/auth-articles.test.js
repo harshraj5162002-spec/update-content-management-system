@@ -61,10 +61,36 @@ test('reader and author signup, login, and article permissions work end to end',
     assert.equal(readerSignup.payload.user.role, 'reader');
     const readerLogin = await request('/auth/login', {
       method: 'POST',
-      body: { email: 'test-reader@example.com', password: 'ReaderPass123!' },
+      body: { email: 'test-reader@example.com', password: 'ReaderPass123!', role: 'reader' },
     });
     assert.equal(readerLogin.status, 200);
     assert.equal(readerLogin.payload.user.role, 'reader');
+    assert.equal('passwordHash' in readerLogin.payload.user, false);
+    const readerRecord = store.users.find((user) => user.id === readerSignup.payload.user.id);
+    readerRecord.passwordResetTokenHash = 'private-reset-hash';
+    readerRecord.passwordResetTokenExpiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    readerRecord.oauthProviders = { github: 'private-provider-id' };
+    const readerProfile = await request('/me/profile', { token: readerLogin.payload.token });
+    assert.equal(readerProfile.status, 200);
+    assert.equal('passwordResetTokenHash' in readerProfile.payload.user, false);
+    assert.equal('oauthProviders' in readerProfile.payload.user, false);
+    const missingLoginRole = await request('/auth/login', {
+      method: 'POST',
+      body: { email: 'test-reader@example.com', password: 'ReaderPass123!' },
+    });
+    assert.equal(missingLoginRole.status, 400);
+    const incorrectReaderRole = await request('/auth/login', {
+      method: 'POST',
+      body: { email: 'test-reader@example.com', password: 'ReaderPass123!', role: 'author' },
+    });
+    assert.equal(incorrectReaderRole.status, 403);
+    const readerAnalyticsDenied = await request('/me/analytics?days=7', { token: readerLogin.payload.token });
+    assert.equal(readerAnalyticsDenied.status, 403);
+    const readerInsights = await request('/me/reading-insights?days=30', { token: readerLogin.payload.token });
+    assert.equal(readerInsights.status, 200);
+    assert.equal(readerInsights.payload.rangeDays, 30);
+    assert.equal(readerInsights.payload.timeline.length, 30);
+    assert.equal(readerInsights.payload.estimateOnly, true);
     const readerCopilot = await request('/ai/assistant', {
       method: 'POST',
       token: readerLogin.payload.token,
@@ -88,7 +114,7 @@ test('reader and author signup, login, and article permissions work end to end',
     assert.equal(resetReuse.status, 400);
     const resetLogin = await request('/auth/login', {
       method: 'POST',
-      body: { email: 'test-reader@example.com', password: 'NewReaderPass456!' },
+      body: { email: 'test-reader@example.com', password: 'NewReaderPass456!', role: 'reader' },
     });
     assert.equal(resetLogin.status, 200);
     assert.equal('passwordResetTokenHash' in resetLogin.payload.user, false);
@@ -101,10 +127,17 @@ test('reader and author signup, login, and article permissions work end to end',
     assert.equal(authorSignup.payload.user.role, 'author');
     const authorLogin = await request('/auth/login', {
       method: 'POST',
-      body: { email: 'test-author@example.com', password: 'AuthorPass123!' },
+      body: { email: 'test-author@example.com', password: 'AuthorPass123!', role: 'author' },
     });
     assert.equal(authorLogin.status, 200);
     assert.equal(authorLogin.payload.user.role, 'author');
+    const authorAnalytics = await request('/me/analytics?days=7', { token: authorLogin.payload.token });
+    assert.equal(authorAnalytics.status, 200);
+    assert.equal(authorAnalytics.payload.rangeDays, 7);
+    assert.equal(authorAnalytics.payload.stats.timeline.length, 7);
+    assert.ok(Array.isArray(authorAnalytics.payload.stats.statusBreakdown));
+    const invalidReaderRange = await request('/me/reading-insights?days=14', { token: readerLogin.payload.token });
+    assert.equal(invalidReaderRange.status, 400);
     const authorCopilot = await request('/ai/assistant', {
       method: 'POST',
       token: authorLogin.payload.token,
@@ -200,6 +233,14 @@ test('reader and author signup, login, and article permissions work end to end',
     });
     assert.equal(authorApproval.status, 403);
     const admin = store.users.find((user) => user.role === 'admin');
+    const adminDashboard = await request('/moderation/dashboard?days=7', { token: signToken(admin) });
+    assert.equal(adminDashboard.status, 200);
+    assert.equal(adminDashboard.payload.analytics.timeline.length, 7);
+    assert.ok(Array.isArray(adminDashboard.payload.analytics.articleStatuses));
+    assert.equal(adminDashboard.payload.analytics.hasUserHistory, true);
+    assert.ok(adminDashboard.payload.analytics.timeline.reduce((total, day) => total + day.users, 0) >= 2);
+    assert.equal((await request('/moderation/dashboard', { token: readerLogin.payload.token })).status, 403);
+    assert.equal((await request('/moderation/dashboard?days=14', { token: signToken(admin) })).status, 400);
     const adminCopilot = await request('/ai/assistant', {
       method: 'POST',
       token: signToken(admin),

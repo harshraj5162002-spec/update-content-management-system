@@ -28,16 +28,65 @@ function addNotification(userId, type, title) {
 }
 
 router.get('/dashboard', (req, res) => {
+  const rangeDays = Number(req.query.days) || 30;
+  if (![7, 30, 90].includes(rangeDays)) {
+    return res.status(400).json({ message: 'Dashboard analytics support 7, 30, or 90 day ranges.' });
+  }
+  const since = new Date(Date.now() - rangeDays * 24 * 60 * 60 * 1000);
+  const timeline = [];
+  for (let offset = rangeDays - 1; offset >= 0; offset -= 1) {
+    const date = new Date();
+    date.setUTCHours(0, 0, 0, 0);
+    date.setUTCDate(date.getUTCDate() - offset);
+    const key = date.toISOString().slice(0, 10);
+    timeline.push({ date: key, users: 0, moderation: 0, reports: 0, appeals: 0 });
+  }
+  const timelineByDate = new Map(timeline.map((entry) => [entry.date, entry]));
+  const addTimelineEvent = (dateValue, key) => {
+    const date = new Date(dateValue);
+    if (!Number.isFinite(date.getTime()) || date < since) return;
+    const entry = timelineByDate.get(date.toISOString().slice(0, 10));
+    if (entry) entry[key] += 1;
+  };
+  const recentAudit = store.auditLogs.filter((event) => new Date(event.createdAt) >= since);
+  for (const user of store.users) addTimelineEvent(user.createdAt, 'users');
+  for (const event of recentAudit) {
+    if (event.action.startsWith('article.review.') || event.action.startsWith('moderation.')) {
+      addTimelineEvent(event.createdAt, 'moderation');
+    }
+  }
+  for (const report of store.reports) addTimelineEvent(report.createdAt, 'reports');
+  for (const appeal of store.appeals) addTimelineEvent(appeal.createdAt, 'appeals');
   const approved = store.articles.filter((article) => article.moderation?.status === 'approved' && article.status === 'published').length;
   const review = store.articles.filter((article) => article.status === 'pending').length;
   const blocked = store.articles.filter((article) => article.status === 'quarantined').length;
   const openReports = store.reports.filter((report) => report.status === 'open').length;
   const openAppeals = store.appeals.filter((appeal) => appeal.status === 'open').length;
-  const recentAbuse = store.abuseEvents.filter((event) => Date.now() - new Date(event.createdAt).getTime() < 7 * 24 * 60 * 60 * 1000).length;
+  const recentAbuse = store.abuseEvents.filter((event) => new Date(event.createdAt) >= since).length;
   const moderated = store.moderationResults.length;
+  const articleStatuses = ['draft', 'pending', 'published', 'quarantined', 'rejected', 'changes_requested', 'archived']
+    .map((status) => ({ status, count: store.articles.filter((article) => article.status === status).length }));
+  const reportsByStatus = ['open', 'resolved', 'dismissed']
+    .map((status) => ({ status, count: store.reports.filter((report) => report.status === status).length }));
+  const appealsByStatus = ['open', 'approved', 'upheld']
+    .map((status) => ({ status, count: store.appeals.filter((appeal) => appeal.status === status).length }));
+  const userRoles = ['reader', 'author', 'admin']
+    .map((role) => ({ role, count: store.users.filter((user) => user.role === role).length }));
 
   res.json({
+    rangeDays,
     overview: { approved, review, blocked, moderated, openReports, openAppeals, recentAbuse },
+    analytics: {
+      timeline,
+      articleStatuses,
+      reportsByStatus,
+      appealsByStatus,
+      userRoles,
+      hasUserHistory: store.users.some((user) => user.createdAt && new Date(user.createdAt) >= since),
+      hasModerationActivity: recentAudit.some((event) => event.action.startsWith('article.review.') || event.action.startsWith('moderation.')),
+      hasReportActivity: store.reports.some((report) => report.createdAt && new Date(report.createdAt) >= since),
+      hasAppealActivity: store.appeals.some((appeal) => appeal.createdAt && new Date(appeal.createdAt) >= since),
+    },
     riskDistribution: [
       { label: 'Low risk', value: approved },
       { label: 'Requires review', value: review },

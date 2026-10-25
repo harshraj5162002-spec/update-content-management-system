@@ -16,13 +16,19 @@ const router = express.Router();
 
 function visibleUser(user) {
   if (!user) return null;
-  const { passwordHash, email, reputation, ...profile } = user;
+  const profile = { ...user };
+  for (const field of ['passwordHash', 'passwordResetTokenHash', 'passwordResetTokenExpiresAt', 'oauthProviders', 'email', 'reputation']) {
+    delete profile[field];
+  }
   return profile;
 }
 
 function ownUser(user) {
   if (!user) return null;
-  const { passwordHash, ...profile } = user;
+  const profile = { ...user };
+  for (const field of ['passwordHash', 'passwordResetTokenHash', 'passwordResetTokenExpiresAt', 'oauthProviders']) {
+    delete profile[field];
+  }
   return profile;
 }
 
@@ -244,9 +250,16 @@ router.get('/me/history', requireAuth, (req, res) => {
 });
 
 router.get('/me/reading-insights', requireAuth, (req, res) => {
+  const rangeDays = Number(req.query.days) || 7;
+  if (![7, 30, 90].includes(rangeDays)) {
+    return res.status(400).json({ message: 'Reading insights support 7, 30, or 90 day ranges.' });
+  }
+  const since = new Date(Date.now() - rangeDays * 24 * 60 * 60 * 1000);
   const history = store.readingHistory.filter((entry) => entry.userId === req.user.id);
   const articlesById = new Map(store.articles.map((article) => [article.id, article]));
-  const visibleHistory = history.filter((entry) => articlesById.get(entry.articleId)?.status === 'published');
+  const visibleHistory = history.filter((entry) =>
+    articlesById.get(entry.articleId)?.status === 'published' && new Date(entry.readAt) >= since
+  );
   const categories = new Map();
 
   for (const entry of visibleHistory) {
@@ -255,14 +268,17 @@ router.get('/me/reading-insights', requireAuth, (req, res) => {
   }
 
   const timeline = [];
-  for (let offset = 6; offset >= 0; offset -= 1) {
+  for (let offset = rangeDays - 1; offset >= 0; offset -= 1) {
     const date = new Date();
     date.setUTCHours(0, 0, 0, 0);
     date.setUTCDate(date.getUTCDate() - offset);
     const key = date.toISOString().slice(0, 10);
     timeline.push({
       date: key,
-      reads: visibleHistory.filter((entry) => String(entry.readAt).slice(0, 10) === key).length,
+      reads: visibleHistory.filter((entry) => {
+        const readAt = new Date(entry.readAt);
+        return Number.isFinite(readAt.getTime()) && readAt.toISOString().slice(0, 10) === key;
+      }).length,
     });
   }
 
@@ -273,9 +289,11 @@ router.get('/me/reading-insights', requireAuth, (req, res) => {
   }, 0);
 
   res.json({
+    rangeDays,
     articlesRead: visibleHistory.length,
     completed: visibleHistory.filter((entry) => entry.progress >= 80).length,
     estimatedMinutes: readMinutes,
+    estimateOnly: true,
     topCategories: [...categories.entries()]
       .sort((a, b) => b[1] - a[1])
       .slice(0, 4)

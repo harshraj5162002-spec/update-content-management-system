@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { Link, NavLink, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
-import { Activity, BarChart3, Bell, BookOpen, Bookmark, CheckCircle2, Clock3, Compass, FileText, Heart, History, LayoutDashboard, LogIn, LogOut, Menu, PenLine, Search, Settings, ShieldCheck, Sparkles, Tags, TrendingUp, Users, WandSparkles, X } from 'lucide-react';
+import { Activity, BarChart3, Bell, BookOpen, Bookmark, CheckCircle2, Clock3, Compass, Eye, EyeOff, FileText, Heart, History, LayoutDashboard, LogIn, LogOut, Menu, PenLine, Search, Settings, ShieldCheck, Sparkles, Tags, TrendingUp, Users, WandSparkles, X } from 'lucide-react';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api';
+const LazyAnalyticsVisualization = lazy(() => import('./AnalyticsCharts'));
 
 async function apiRequest(path, options = {}) {
   const token = localStorage.getItem('cms-token');
@@ -29,12 +30,19 @@ async function apiRequest(path, options = {}) {
 }
 
 function App() {
-  const [token, setToken] = useState(localStorage.getItem('cms-token') || '');
+  const [token, setToken] = useState(() => new URLSearchParams(window.location.hash.slice(1)).get('token') || localStorage.getItem('cms-token') || '');
   const [user, setUser] = useState(null);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const oauthAuthPending = useRef(Boolean(new URLSearchParams(window.location.hash.slice(1)).get('token')));
   const navigate = useNavigate();
   const location = useLocation();
+
+  useEffect(() => {
+    const fragment = new URLSearchParams(location.hash.slice(1));
+    if (!fragment.get('token')) return;
+    navigate({ pathname: location.pathname, search: location.search }, { replace: true });
+  }, [location.hash, location.pathname, location.search, navigate]);
 
   useEffect(() => {
     if (token) {
@@ -43,6 +51,12 @@ function App() {
       localStorage.removeItem('cms-token');
     }
   }, [token]);
+
+  useEffect(() => {
+    if (!oauthAuthPending.current || !user) return;
+    oauthAuthPending.current = false;
+    navigate(user.role === 'reader' ? '/for-you' : user.role === 'admin' ? '/admin' : '/author', { replace: true });
+  }, [user, navigate]);
 
   useEffect(() => {
     let cancelled = false;
@@ -77,8 +91,9 @@ function App() {
     { to: '/categories', label: 'Categories', icon: Tags },
     { to: '/authors', label: 'Authors', icon: Users },
     ...(token ? [
-      { to: '/saved', label: 'Saved articles', icon: Bookmark },
-      { to: '/history', label: 'Reading history', icon: History },
+    { to: '/reader/analytics', label: 'Reading insights', icon: Activity },
+    { to: '/saved', label: 'Saved articles', icon: Bookmark },
+    { to: '/history', label: 'Reading history', icon: History },
     ] : []),
   ];
   const workspaceLinks = user?.role === 'admin'
@@ -178,6 +193,7 @@ function App() {
           <Route path="/authors/:id" element={<AuthorProfilePage />} />
           <Route path="/saved" element={<ArticleCollectionPage title="Saved articles" endpoint="/me/bookmarks" authenticated />} />
           <Route path="/history" element={<ArticleCollectionPage title="Reading history" endpoint="/me/history" authenticated />} />
+          <Route path="/reader/analytics" element={<ReaderAnalyticsPage user={user} />} />
           <Route path="/notifications" element={<NotificationsPage />} />
           <Route path="/settings" element={<SettingsPage user={user} />} />
           <Route path="/author" element={<AuthorDashboardPage user={user} />} />
@@ -396,7 +412,10 @@ function HomePage({ user }) {
           ) : (
             <div className="insight-card"><Sparkles size={20} /><div><strong>Recommendations get smarter</strong><span>Sign in and choose your interests to personalize your For You feed.</span></div></div>
           )}
-          <Link to={user ? '/settings' : '/auth'} className="text-link">{user ? 'Set your interests' : 'Create a reader profile'}</Link>
+          <div className="button-row">
+            <Link to={user ? '/reader/analytics' : '/auth'} className="text-link">{user ? 'View reading insights' : 'Create a reader profile'}</Link>
+            {user && <Link to="/settings" className="text-link">Set your interests</Link>}
+          </div>
         </div>
         <div className="section-card ai-assistant-card">
           <div className="section-header">
@@ -695,10 +714,24 @@ function ArticlePage({ token }) {
 
 function AuthPage({ onLogin }) {
   const navigate = useNavigate();
+  const location = useLocation();
   const [mode, setMode] = useState('login');
-  const [form, setForm] = useState({ name: '', email: 'author@signalcms.dev', password: 'AuthorPass123!', role: 'reader' });
+  const [form, setForm] = useState({ name: '', email: '', password: '', role: 'reader' });
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
+  const [error, setError] = useState(() => new URLSearchParams(location.search).get('oauth_error') || '');
+  const [showPassword, setShowPassword] = useState(false);
+  const [oauthProviders, setOauthProviders] = useState({ google: false, github: false });
+
+  useEffect(() => {
+    apiRequest('/auth/oauth/providers')
+      .then(setOauthProviders)
+      .catch((providersError) => setError(providersError.message));
+  }, []);
+
+  useEffect(() => {
+    if (!new URLSearchParams(location.search).get('oauth_error')) return;
+    navigate({ pathname: location.pathname }, { replace: true });
+  }, [location.pathname, location.search, navigate]);
 
   async function handleSubmit(event) {
     event.preventDefault();
@@ -707,16 +740,20 @@ function AuthPage({ onLogin }) {
 
     try {
       const payload = mode === 'login'
-        ? await apiRequest('/auth/login', { method: 'POST', body: JSON.stringify({ email: form.email, password: form.password }) })
+        ? await apiRequest('/auth/login', { method: 'POST', body: JSON.stringify({ email: form.email, password: form.password, role: form.role }) })
         : await apiRequest('/auth/signup', { method: 'POST', body: JSON.stringify({ name: form.name, email: form.email, password: form.password, role: form.role }) });
 
       onLogin(payload.token);
-      navigate(payload.user?.role === 'reader' ? '/for-you' : '/author');
+      navigate(payload.user?.role === 'reader' ? '/for-you' : payload.user?.role === 'admin' ? '/admin' : '/author');
     } catch (err) {
       setError(err.message);
     } finally {
       setLoading(false);
     }
+  }
+
+  function startOAuth(provider) {
+    window.location.assign(`${API_BASE}/auth/oauth/${provider}?role=${encodeURIComponent(form.role)}`);
   }
 
   return (
@@ -731,11 +768,13 @@ function AuthPage({ onLogin }) {
         <div className="auth-toggle">
           <button type="button" className={mode === 'login' ? 'active' : ''} onClick={() => {
             setMode('login');
-            setForm((current) => ({ ...current, email: current.email || 'author@signalcms.dev', password: current.password || 'AuthorPass123!' }));
+            setForm((current) => ({ ...current, email: '', password: '' }));
+            setError('');
           }}>Login</button>
           <button type="button" className={mode === 'signup' ? 'active' : ''} onClick={() => {
             setMode('signup');
-            setForm((current) => ({ ...current, email: '', password: '' }));
+            setForm((current) => ({ ...current, email: '', password: '', role: current.role === 'admin' ? 'reader' : current.role }));
+            setError('');
           }}>Signup</button>
         </div>
 
@@ -747,15 +786,15 @@ function AuthPage({ onLogin }) {
             </label>
           )}
 
-          {mode === 'signup' && (
-            <label>
-              Account type
-              <select value={form.role} onChange={(event) => setForm({ ...form, role: event.target.value })}>
-                <option value="reader">Reader</option>
-                <option value="author">Author</option>
-              </select>
-            </label>
-          )}
+          <label>
+            Account role
+            <select value={form.role} onChange={(event) => setForm({ ...form, role: event.target.value })}>
+              <option value="reader">Reader</option>
+              <option value="author">Author</option>
+              {mode === 'login' && <option value="admin">Admin</option>}
+            </select>
+            {mode === 'login' && <small className="muted-copy">Your selection is checked against your account; it does not change your permissions.</small>}
+          </label>
 
           <label>
             Email
@@ -764,10 +803,15 @@ function AuthPage({ onLogin }) {
 
           <label>
             Password
-            <input type="password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} required minLength={mode === 'signup' ? 8 : 1} autoComplete={mode === 'signup' ? 'new-password' : 'current-password'} />
+            <span className="password-field">
+              <input type={showPassword ? 'text' : 'password'} value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} required minLength={mode === 'signup' ? 8 : 1} autoComplete={mode === 'signup' ? 'new-password' : 'current-password'} />
+              <button type="button" className="password-toggle" onClick={() => setShowPassword(!showPassword)} aria-label={showPassword ? 'Hide password' : 'Show password'}>
+                {showPassword ? <EyeOff size={17} /> : <Eye size={17} />}
+              </button>
+            </span>
           </label>
 
-          {error && <div className="error-panel inline-error">{error}</div>}
+          {error && <div className="error-panel inline-error" role="alert">{error}</div>}
 
           <button type="submit" className="primary-button full-width" disabled={loading}>
             {loading ? 'Please wait…' : mode === 'login' ? 'Login' : 'Create account'}
@@ -775,9 +819,16 @@ function AuthPage({ onLogin }) {
           {mode === 'login' && <Link className="text-link" to="/forgot-password">Forgot password?</Link>}
         </form>
 
+        {(oauthProviders.google || oauthProviders.github) && <>
+          <div className="auth-divider"><span>or continue with</span></div>
+          <div className="oauth-buttons">
+            {oauthProviders.google && <button type="button" className="secondary-button" onClick={() => startOAuth('google')}>Continue with Google</button>}
+            {oauthProviders.github && <button type="button" className="secondary-button" onClick={() => startOAuth('github')}>Continue with GitHub</button>}
+          </div>
+        </>}
+
         <div className="demo-note">
-          Demo access: admin@signalcms.dev / AdminPass123!<br />
-          author@signalcms.dev / AuthorPass123!
+          Demo accounts are listed in the project README.
         </div>
       </section>
     </main>
@@ -949,30 +1000,36 @@ function AuthorDashboardPage({ user }) {
 
 function AdminDashboardPage() {
   const [moderation, setModeration] = useState(null);
+  const [days, setDays] = useState('30');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
   useEffect(() => {
+    let cancelled = false;
     async function loadAdminData() {
+      setLoading(true);
+      setError('');
       try {
-        const data = await apiRequest('/moderation/dashboard');
-        setModeration(data);
+        const data = await apiRequest(`/moderation/dashboard?days=${days}`);
+        if (!cancelled) setModeration(data);
       } catch (error) {
-        setError(error.message);
+        if (!cancelled) setError(error.message);
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     }
 
     loadAdminData();
-  }, []);
+    return () => { cancelled = true; };
+  }, [days]);
 
-  if (loading) return <div className="page-panel">Loading moderation dashboard…</div>;
+  if (loading && !moderation) return <div className="page-panel">Loading moderation dashboard…</div>;
 
   return (
     <main className="page-content">
       <PageHeading eyebrow="Trust & safety" title="Admin overview" description="Moderation decisions, community reports, appeals and abuse signals." action={<Link to="/admin/review" className="primary-button"><ShieldCheck size={16} />Review queue</Link>} />
       {error && <div className="page-panel error-panel">{error}</div>}
+      <label className="sort-select">Analytics range<select value={days} onChange={(event) => setDays(event.target.value)}><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option></select></label>
       <section className="section-card">
         <div className="stats-grid">
           <div className="stat-box"><span>Approved</span><strong>{moderation?.overview?.approved || 0}</strong></div>
@@ -980,7 +1037,40 @@ function AdminDashboardPage() {
           <div className="stat-box"><span>Blocked</span><strong>{moderation?.overview?.blocked || 0}</strong></div>
           <div className="stat-box"><span>Open reports</span><strong>{moderation?.overview?.openReports || 0}</strong></div>
           <div className="stat-box"><span>Open appeals</span><strong>{moderation?.overview?.openAppeals || 0}</strong></div>
-          <div className="stat-box"><span>Abuse alerts (7 days)</span><strong>{moderation?.overview?.recentAbuse || 0}</strong></div>
+          <div className="stat-box"><span>Abuse alerts ({days} days)</span><strong>{moderation?.overview?.recentAbuse || 0}</strong></div>
+        </div>
+      </section>
+
+      <section className="dashboard-two-up">
+        <div className="section-card">
+          <h2>Growth and community activity</h2>
+          <p className="muted-copy">Daily registrations, moderation actions, reports and appeals based on recorded events.</p>
+          <TrendChart
+            data={moderation?.analytics?.timeline || []}
+            lines={[
+              { key: 'users', name: 'New users', color: '#647b62' },
+              { key: 'moderation', name: 'Moderation', color: '#9c6a39' },
+              { key: 'reports', name: 'Reports', color: '#b45c53' },
+              { key: 'appeals', name: 'Appeals', color: '#6b759e' },
+            ]}
+            empty={!moderation?.analytics?.hasUserHistory && !moderation?.analytics?.hasModerationActivity && !moderation?.analytics?.hasReportActivity && !moderation?.analytics?.hasAppealActivity}
+            emptyMessage="No user or moderation history is recorded for this period."
+          />
+        </div>
+        <div className="section-card">
+          <h2>Article statuses</h2>
+          <p className="muted-copy">Current distribution across all articles.</p>
+          <DistributionChart data={moderation?.analytics?.articleStatuses || []} nameKey="status" valueKey="count" />
+        </div>
+      </section>
+      <section className="dashboard-two-up">
+        <div className="section-card">
+          <h2>Reports by status</h2>
+          <DistributionChart data={moderation?.analytics?.reportsByStatus || []} nameKey="status" valueKey="count" />
+        </div>
+        <div className="section-card">
+          <h2>Appeals by status</h2>
+          <DistributionChart data={moderation?.analytics?.appealsByStatus || []} nameKey="status" valueKey="count" />
         </div>
       </section>
 
@@ -1000,6 +1090,14 @@ function AdminDashboardPage() {
       </section>
     </main>
   );
+}
+
+function TrendChart(props) {
+  return <Suspense fallback={<div className="empty-state chart-empty">Loading chart…</div>}><LazyAnalyticsVisualization mode="trend" {...props} /></Suspense>;
+}
+
+function DistributionChart(props) {
+  return <Suspense fallback={<div className="empty-state chart-empty">Loading chart…</div>}><LazyAnalyticsVisualization mode="distribution" {...props} /></Suspense>;
 }
 
 function PageHeading({ eyebrow, title, description, action }) {
@@ -1479,16 +1577,49 @@ function AuthorAnalyticsPage({ user }) {
   }, [days, user]);
   if (!user) return <AccessNotice />;
   return <main className="page-content"><PageHeading eyebrow="Performance" title="Author analytics" description="Views and engagement for your published articles." />
-    <label className="sort-select">Date range<select value={days} onChange={(event) => setDays(event.target.value)}><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option><option value="365">Last year</option></select></label>
+    <label className="sort-select">Date range<select value={days} onChange={(event) => setDays(event.target.value)}><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option></select></label>
     {error ? <div className="page-panel error-panel">{error}</div> : stats && <>
       <div className="stats-grid">{[['Views', stats.views], ['Likes', stats.likes], ['Shares', stats.shares], ['Comments', stats.comments], ['Engagement rate', `${stats.engagementRate}%`], ['Published', stats.publishedArticles]].map(([label, value]) => <div className="stat-box" key={label}><span>{label}</span><strong>{Number.isFinite(value) ? value.toLocaleString() : value}</strong></div>)}</div>
-      <section className="section-card"><h2>Tracked engagement by day</h2><p className="muted-copy">Counts include interactions recorded by this CMS during the selected range.</p><div className="analytics-chart">{(stats.timeline || []).map((day) => {
-        const maximum = Math.max(1, ...(stats.timeline || []).map((item) => item.views + item.likes + item.shares + item.comments));
-        const total = day.views + day.likes + day.shares + day.comments;
-        return <div className="analytics-chart-day" key={day.date} title={`${day.date}: ${total} interactions`}><span style={{ height: `${Math.max(total ? 7 : 2, total / maximum * 100)}%` }} /><small>{new Date(`${day.date}T12:00:00`).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</small></div>;
-      })}</div>{!stats.activityTracked && <p className="muted-copy">No tracked interactions are available in this period yet.</p>}</section>
-      <section className="section-card"><h2>Top performing articles</h2><ArticleList items={stats.topArticles} /></section>
+      <section className="section-card"><h2>Engagement over time</h2><p className="muted-copy">Counts include interactions recorded by this CMS during the selected range.</p><TrendChart data={stats.timeline || []} lines={[
+        { key: 'views', name: 'Views', color: '#647b62' },
+        { key: 'likes', name: 'Likes', color: '#b45c53' },
+        { key: 'comments', name: 'Comments', color: '#6b759e' },
+        { key: 'shares', name: 'Shares', color: '#9c6a39' },
+      ]} empty={!stats.activityTracked} emptyMessage="No tracked interactions are available in this period yet." /></section>
+      <section className="section-card"><h2>Article status</h2><DistributionChart data={stats.statusBreakdown || []} nameKey="status" valueKey="count" /></section>
+      <section className="section-card"><h2>Top performing articles</h2>{stats.topArticles?.length ? <div className="table-wrap"><table><thead><tr><th>Article</th><th>Views</th><th>Likes</th><th>Comments</th><th>Shares</th></tr></thead><tbody>{stats.topArticles.map((article) => <tr key={article.id}><td><Link className="text-link" to={`/article/${article.id}`}>{article.title}</Link></td><td>{article.analytics?.views || 0}</td><td>{article.analytics?.likes || 0}</td><td>{article.analytics?.comments || 0}</td><td>{article.analytics?.shares || 0}</td></tr>)}</tbody></table></div> : <div className="empty-state">No published articles yet.</div>}</section>
       <section className="section-card"><h2>Popular topics</h2><div className="tag-grid">{stats.topics.map((topic) => <span className="category-pill" key={topic.name}>{topic.name} · {topic.count}</span>)}</div></section>
+    </>}
+  </main>;
+}
+
+function ReaderAnalyticsPage({ user }) {
+  const [insights, setInsights] = useState(null);
+  const [days, setDays] = useState('7');
+  const [error, setError] = useState('');
+  useEffect(() => {
+    if (!user) return;
+    apiRequest(`/me/reading-insights?days=${days}`)
+      .then(setInsights)
+      .catch((loadError) => setError(loadError.message));
+  }, [days, user]);
+  if (!user) return <AccessNotice message="Sign in to view your reading activity and estimated reading time." />;
+  return <main className="page-content">
+    <PageHeading eyebrow="Reader workspace" title="Reading insights" description="Your reading activity and estimated time based on saved progress." />
+    <label className="sort-select">Date range<select value={days} onChange={(event) => { setDays(event.target.value); setError(''); }}><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option></select></label>
+    {error && <div className="page-panel error-panel">{error}</div>}
+    {insights && <>
+      <section className="stats-grid">
+        <div className="stat-box"><span>Articles read</span><strong>{insights.articlesRead}</strong></div>
+        <div className="stat-box"><span>Completed reads</span><strong>{insights.completed}</strong></div>
+        <div className="stat-box"><span>Estimated reading time</span><strong>{insights.estimatedMinutes} min</strong></div>
+      </section>
+      <section className="section-card">
+        <h2>Reading activity</h2>
+        <p className="muted-copy">Daily reading history. Time is an estimate based on article word count and recorded progress, not a timed session.</p>
+        <TrendChart data={insights.timeline || []} lines={[{ key: 'reads', name: 'Articles read', color: '#647b62' }]} emptyMessage="No reading activity is recorded for this period yet." />
+      </section>
+      <section className="section-card"><h2>Top categories</h2>{insights.topCategories?.length ? <div className="tag-grid">{insights.topCategories.map((category) => <span className="category-pill" key={category.name}>{category.name} · {category.reads}</span>)}</div> : <div className="empty-state">Read a published article to see category insights.</div>}</section>
     </>}
   </main>;
 }

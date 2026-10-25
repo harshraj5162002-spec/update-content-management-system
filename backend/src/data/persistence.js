@@ -1,4 +1,5 @@
 const models = require('../models');
+const { store } = require('./store');
 
 const collectionModels = {
   users: models.User,
@@ -67,6 +68,55 @@ async function saveRecord(collection, record) {
   );
 }
 
+async function consumePasswordResetToken(userId, tokenHash, passwordHash, now = new Date()) {
+  const user = store.users.find((item) =>
+    item.id === userId &&
+    item.passwordResetTokenHash === tokenHash &&
+    item.passwordResetTokenExpiresAt &&
+    new Date(item.passwordResetTokenExpiresAt).getTime() > now.getTime()
+  );
+  if (!user) return false;
+
+  if (databaseEnabled) {
+    const consumed = await models.User.findOneAndUpdate(
+      {
+        _id: userId,
+        passwordResetTokenHash: tokenHash,
+        passwordResetTokenExpiresAt: { $gt: now },
+      },
+      {
+        $set: { passwordHash },
+        $unset: { passwordResetTokenHash: 1, passwordResetTokenExpiresAt: 1 },
+      },
+      { new: true, runValidators: true }
+    ).lean();
+    if (!consumed) return false;
+  }
+
+  user.passwordHash = passwordHash;
+  delete user.passwordResetTokenHash;
+  delete user.passwordResetTokenExpiresAt;
+  return true;
+}
+
+async function clearPasswordResetToken(userId, tokenHash) {
+  const user = store.users.find((item) => item.id === userId && item.passwordResetTokenHash === tokenHash);
+  if (!user) return false;
+
+  if (databaseEnabled) {
+    const cleared = await models.User.findOneAndUpdate(
+      { _id: userId, passwordResetTokenHash: tokenHash },
+      { $unset: { passwordResetTokenHash: 1, passwordResetTokenExpiresAt: 1 } },
+      { new: true }
+    ).lean();
+    if (!cleared) return false;
+  }
+
+  delete user.passwordResetTokenHash;
+  delete user.passwordResetTokenExpiresAt;
+  return true;
+}
+
 async function deleteRecord(collection, id) {
   if (!databaseEnabled) return;
 
@@ -85,4 +135,4 @@ async function saveSettings(settings) {
   );
 }
 
-module.exports = { hydrateStore, saveRecord, deleteRecord, saveSettings };
+module.exports = { hydrateStore, saveRecord, consumePasswordResetToken, clearPasswordResetToken, deleteRecord, saveSettings };

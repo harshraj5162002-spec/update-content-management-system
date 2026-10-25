@@ -4,7 +4,7 @@ const crypto = require('node:crypto');
 const rateLimit = require('express-rate-limit');
 const { body, validationResult } = require('express-validator');
 const { store } = require('../data/store');
-const { saveRecord } = require('../data/persistence');
+const { saveRecord, consumePasswordResetToken, clearPasswordResetToken } = require('../data/persistence');
 const { recordAudit } = require('../services/audit');
 const { sendPasswordResetEmail, isEmailConfigured } = require('../services/email');
 const { isOAuthConfigured, createOAuthRequest, consumeOAuthState, matchesOAuthState, getOAuthIdentity, OAuthError } = require('../services/oauth');
@@ -13,6 +13,7 @@ const { requireAuth, signToken, isActiveUser } = require('../middleware/auth');
 const { frontendUrl, nodeEnv } = require('../config/env');
 
 const router = express.Router();
+const pendingAccountEmails = new Set();
 const resetRateLimit = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 5,
@@ -34,6 +35,27 @@ function readCookie(req, name) {
   return entry ? entry.slice(name.length + 1) : '';
 }
 
+async function createUserForEmail(email, createUser) {
+  if (pendingAccountEmails.has(email) || store.users.some((user) => user.email.toLowerCase() === email)) return null;
+  pendingAccountEmails.add(email);
+  try {
+    if (store.users.some((user) => user.email.toLowerCase() === email)) return null;
+    const user = await createUser();
+    store.users.push(user);
+    try {
+      await saveRecord('users', user);
+    } catch (error) {
+      const index = store.users.findIndex((candidate) => candidate.id === user.id);
+      if (index !== -1) store.users.splice(index, 1);
+      if (error.code === 11000) return null;
+      throw error;
+    }
+    return user;
+  } finally {
+    pendingAccountEmails.delete(email);
+  }
+}
+
 router.post(
   '/signup',
   [
@@ -51,12 +73,7 @@ router.post(
     const { name, password } = req.body;
     const role = req.body.role || 'reader';
     const email = req.body.email.trim().toLowerCase();
-    const existing = store.users.find((user) => user.email.toLowerCase() === email);
-    if (existing) {
-      return res.status(409).json({ message: 'Account already exists for this email.' });
-    }
-
-    const user = {
+    const user = await createUserForEmail(email, async () => ({
       id: `u-${crypto.randomUUID()}`,
       name: name.trim(),
       email,
@@ -68,10 +85,8 @@ router.post(
       preferences: [],
       reputation: 75,
       createdAt: new Date().toISOString(),
-    };
-
-    store.users.push(user);
-    await saveRecord('users', user);
+    }));
+    if (!user) return res.status(409).json({ message: 'Account already exists for this email.' });
     await recordAudit({ actorId: user.id, action: 'auth.signup', targetType: 'user', targetId: user.id, outcome: 'created' });
     const token = signToken(user);
 
@@ -198,7 +213,7 @@ router.get('/oauth/:provider/callback', asyncHandler(async (req, res) => {
         callbackUrl.searchParams.set('oauth_error', 'Administrator accounts cannot be created through social sign-in.');
         return res.redirect(callbackUrl.toString());
       }
-      user = {
+      user = await createUserForEmail(verifiedEmail, async () => ({
         id: `u-${crypto.randomUUID()}`,
         name: displayName || verifiedEmail.split('@')[0],
         email: verifiedEmail,
@@ -211,9 +226,11 @@ router.get('/oauth/:provider/callback', asyncHandler(async (req, res) => {
         preferences: [],
         reputation: 75,
         createdAt: new Date().toISOString(),
-      };
-      store.users.push(user);
-      await saveRecord('users', user);
+      }));
+      if (!user) {
+        callbackUrl.searchParams.set('oauth_error', 'An account already uses this email. Sign in with that account before linking a provider.');
+        return res.redirect(callbackUrl.toString());
+      }
       await recordAudit({ actorId: user.id, action: 'auth.oauth.signup', targetType: 'user', targetId: user.id, outcome: provider });
     }
     const token = signToken(user);
@@ -239,16 +256,19 @@ router.post('/password-reset/request', resetRateLimit, [
   const user = store.users.find((item) => item.email.toLowerCase() === email);
   if (user) {
     const token = crypto.randomBytes(32).toString('hex');
-    user.passwordResetTokenHash = crypto.createHash('sha256').update(token).digest('hex');
+    const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+    user.passwordResetTokenHash = tokenHash;
     user.passwordResetTokenExpiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
-    await saveRecord('users', user);
     try {
-      await sendPasswordResetEmail(user.email, token);
-    } catch (error) {
-      delete user.passwordResetTokenHash;
-      delete user.passwordResetTokenExpiresAt;
       await saveRecord('users', user);
-      throw error;
+      await sendPasswordResetEmail(user.email, token);
+    } catch {
+      try {
+        await clearPasswordResetToken(user.id, tokenHash);
+      } catch {
+        console.error('Password-reset token cleanup failed.');
+      }
+      console.error('Password-reset request could not be completed.');
     }
   }
 
@@ -270,10 +290,9 @@ router.post('/password-reset/confirm', resetRateLimit, [
   );
   if (!user) return res.status(400).json({ message: 'The reset link is invalid or expired.' });
 
-  user.passwordHash = await bcrypt.hash(req.body.password, 10);
-  delete user.passwordResetTokenHash;
-  delete user.passwordResetTokenExpiresAt;
-  await saveRecord('users', user);
+  const passwordHash = await bcrypt.hash(req.body.password, 10);
+  const consumed = await consumePasswordResetToken(user.id, tokenHash, passwordHash);
+  if (!consumed) return res.status(400).json({ message: 'The reset link is invalid or expired.' });
   await recordAudit({ actorId: user.id, action: 'auth.password.reset', targetType: 'user', targetId: user.id, outcome: 'success' });
   res.json({ message: 'Password updated. You can now sign in with your new password.' });
 }));

@@ -59,6 +59,18 @@ test('reader and author signup, login, and article permissions work end to end',
     });
     assert.equal(readerSignup.status, 201);
     assert.equal(readerSignup.payload.user.role, 'reader');
+    const [duplicateSignupA, duplicateSignupB] = await Promise.all([
+      request('/auth/signup', {
+        method: 'POST',
+        body: { name: 'Duplicate One', email: 'duplicate-reader@example.com', password: 'ReaderPass123!', role: 'reader' },
+      }),
+      request('/auth/signup', {
+        method: 'POST',
+        body: { name: 'Duplicate Two', email: 'duplicate-reader@example.com', password: 'ReaderPass123!', role: 'reader' },
+      }),
+    ]);
+    assert.deepEqual([duplicateSignupA.status, duplicateSignupB.status].sort(), [201, 409]);
+    assert.equal(store.users.filter((user) => user.email === 'duplicate-reader@example.com').length, 1);
     const readerLogin = await request('/auth/login', {
       method: 'POST',
       body: { email: 'test-reader@example.com', password: 'ReaderPass123!', role: 'reader' },
@@ -107,17 +119,40 @@ test('reader and author signup, login, and article permissions work end to end',
       body: { token: resetToken, password: 'NewReaderPass456!' },
     });
     assert.equal(resetResponse.status, 200);
+    assert.equal('passwordResetTokenHash' in resetUser, false);
     const resetReuse = await request('/auth/password-reset/confirm', {
       method: 'POST',
       body: { token: resetToken, password: 'AnotherReaderPass789!' },
     });
     assert.equal(resetReuse.status, 400);
+    const expiredToken = crypto.randomBytes(32).toString('hex');
+    resetUser.passwordResetTokenHash = crypto.createHash('sha256').update(expiredToken).digest('hex');
+    resetUser.passwordResetTokenExpiresAt = new Date(Date.now() - 1000).toISOString();
+    const expiredReset = await request('/auth/password-reset/confirm', {
+      method: 'POST',
+      body: { token: expiredToken, password: 'ExpiredPass123!' },
+    });
+    assert.equal(expiredReset.status, 400);
     const resetLogin = await request('/auth/login', {
       method: 'POST',
       body: { email: 'test-reader@example.com', password: 'NewReaderPass456!', role: 'reader' },
     });
     assert.equal(resetLogin.status, 200);
     assert.equal('passwordResetTokenHash' in resetLogin.payload.user, false);
+    const concurrentToken = crypto.randomBytes(32).toString('hex');
+    resetUser.passwordResetTokenHash = crypto.createHash('sha256').update(concurrentToken).digest('hex');
+    resetUser.passwordResetTokenExpiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    const concurrentReset = await Promise.all([
+      request('/auth/password-reset/confirm', {
+        method: 'POST',
+        body: { token: concurrentToken, password: 'ConcurrentPass111!' },
+      }),
+      request('/auth/password-reset/confirm', {
+        method: 'POST',
+        body: { token: concurrentToken, password: 'ConcurrentPass222!' },
+      }),
+    ]);
+    assert.deepEqual(concurrentReset.map((response) => response.status).sort(), [200, 400]);
 
     const authorSignup = await request('/auth/signup', {
       method: 'POST',
@@ -216,6 +251,16 @@ test('reader and author signup, login, and article permissions work end to end',
     });
     assert.equal(authorSubmit.status, 200);
     assert.equal(authorSubmit.payload.article.status, 'pending');
+    const authorRecord = store.users.find((user) => user.id === authorSignup.payload.user.id);
+    authorRecord.passwordResetTokenHash = 'pending-reset-hash';
+    authorRecord.passwordResetTokenExpiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    authorRecord.oauthProviders = { google: 'private-provider-id' };
+    const admin = store.users.find((user) => user.role === 'admin');
+    const reviewQueue = await request('/moderation/queue', { token: signToken(admin) });
+    const pendingAuthor = reviewQueue.payload.items.find((item) => item.id === articleId).author;
+    assert.equal('passwordResetTokenHash' in pendingAuthor, false);
+    assert.equal('oauthProviders' in pendingAuthor, false);
+    assert.equal('passwordHash' in pendingAuthor, false);
     const hiddenWhilePending = await request(`/articles/${articleId}`);
     assert.equal(hiddenWhilePending.status, 404);
     const hiddenQuizAttempt = await request(`/articles/${articleId}/quiz/attempt`, {
@@ -232,7 +277,6 @@ test('reader and author signup, login, and article permissions work end to end',
       body: { decision: 'approve', reason: 'Attempted self approval.' },
     });
     assert.equal(authorApproval.status, 403);
-    const admin = store.users.find((user) => user.role === 'admin');
     const adminDashboard = await request('/moderation/dashboard?days=7', { token: signToken(admin) });
     assert.equal(adminDashboard.status, 200);
     assert.equal(adminDashboard.payload.analytics.timeline.length, 7);

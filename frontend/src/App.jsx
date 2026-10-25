@@ -3,6 +3,9 @@ import { Link, NavLink, Route, Routes, useLocation, useNavigate, useParams } fro
 import { Activity, BarChart3, Bell, BookOpen, Bookmark, CheckCircle2, Clock3, Compass, Eye, EyeOff, FileText, Heart, History, LayoutDashboard, LogIn, LogOut, Menu, PenLine, Search, Settings, ShieldCheck, Sparkles, Tags, TrendingUp, Users, WandSparkles, X } from 'lucide-react';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api';
+const DEMO_ADMIN_EMAIL = import.meta.env.DEV ? import.meta.env.VITE_DEMO_ADMIN_EMAIL?.trim() || '' : '';
+const DEMO_ADMIN_PASSWORD = import.meta.env.DEV ? import.meta.env.VITE_DEMO_ADMIN_PASSWORD || '' : '';
+const HAS_DEMO_ADMIN_CREDENTIALS = Boolean(DEMO_ADMIN_EMAIL && DEMO_ADMIN_PASSWORD);
 const LazyAnalyticsVisualization = lazy(() => import('./AnalyticsCharts'));
 
 async function apiRequest(path, options = {}) {
@@ -77,9 +80,15 @@ function App() {
   }, [token]);
 
   function handleLogout() {
+    localStorage.removeItem('cms-token');
     setToken('');
     setUser(null);
     navigate('/');
+  }
+
+  function handleLogin(nextToken) {
+    localStorage.setItem('cms-token', nextToken);
+    setToken(nextToken);
   }
 
   const isAuthPage = ['/auth', '/forgot-password', '/reset-password'].includes(location.pathname);
@@ -179,7 +188,7 @@ function App() {
 
         <Routes>
           <Route path="/" element={<HomePage user={user} />} />
-          <Route path="/auth" element={<AuthPage onLogin={setToken} />} />
+          <Route path="/auth" element={<AuthPage onLogin={handleLogin} />} />
           <Route path="/forgot-password" element={<ForgotPasswordPage />} />
           <Route path="/reset-password" element={<ResetPasswordPage />} />
           <Route path="/article/:id" element={<ArticlePage token={token} />} />
@@ -788,7 +797,14 @@ function AuthPage({ onLogin }) {
 
           <label>
             Account role
-            <select value={form.role} onChange={(event) => setForm({ ...form, role: event.target.value })}>
+            <select value={form.role} onChange={(event) => {
+              const role = event.target.value;
+              setForm((current) => ({
+                ...current,
+                role,
+                ...(role === 'admin' && DEMO_ADMIN_EMAIL ? { email: DEMO_ADMIN_EMAIL } : {}),
+              }));
+            }}>
               <option value="reader">Reader</option>
               <option value="author">Author</option>
               {mode === 'login' && <option value="admin">Admin</option>}
@@ -798,18 +814,27 @@ function AuthPage({ onLogin }) {
 
           <label>
             Email
-            <input type="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} required autoComplete="email" />
+            <input name="email" type="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} required autoComplete={mode === 'login' ? 'username' : 'email'} />
           </label>
 
           <label>
             Password
             <span className="password-field">
-              <input type={showPassword ? 'text' : 'password'} value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} required minLength={mode === 'signup' ? 8 : 1} autoComplete={mode === 'signup' ? 'new-password' : 'current-password'} />
+              <input name="password" type={showPassword ? 'text' : 'password'} value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} required minLength={mode === 'signup' ? 8 : 1} autoComplete={mode === 'signup' ? 'new-password' : 'current-password'} />
               <button type="button" className="password-toggle" onClick={() => setShowPassword(!showPassword)} aria-label={showPassword ? 'Hide password' : 'Show password'}>
                 {showPassword ? <EyeOff size={17} /> : <Eye size={17} />}
               </button>
             </span>
           </label>
+
+          {mode === 'login' && form.role === 'admin' && (HAS_DEMO_ADMIN_CREDENTIALS ? (
+            <div className="muted-copy">
+              <span>Local development demo account: {DEMO_ADMIN_EMAIL}</span>
+              <button type="button" className="text-link" onClick={() => setForm((current) => ({ ...current, email: DEMO_ADMIN_EMAIL, password: DEMO_ADMIN_PASSWORD }))}>Fill demo credentials</button>
+            </div>
+          ) : (
+            <p className="muted-copy">No local Admin demo credentials are configured. Use your existing Admin account or Forgot password if email recovery is configured. If no Admin account exists, ask the database owner to provision one securely; do not promote a regular user.</p>
+          ))}
 
           {error && <div className="error-panel inline-error" role="alert">{error}</div>}
 

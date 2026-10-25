@@ -162,7 +162,14 @@ router.get('/queue', (req, res) => {
       author: (() => {
         const user = store.users.find((item) => item.id === article.authorId);
         if (!user) return null;
-        const { passwordHash, email, ...safeUser } = user;
+        const {
+          passwordHash,
+          passwordResetTokenHash,
+          passwordResetTokenExpiresAt,
+          oauthProviders,
+          email,
+          ...safeUser
+        } = user;
         return safeUser;
       })(),
     }));

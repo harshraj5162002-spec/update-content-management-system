@@ -45,6 +45,17 @@ test('OAuth provider discovery and callback reject missing state safely', async 
     assert.equal(destination.pathname, '/auth');
     assert.match(destination.searchParams.get('oauth_error'), /could not be verified/i);
     assert.equal(destination.hash, '');
+
+    const oauthRequest = createOAuthRequest('google', 'reader');
+    const state = new URL(oauthRequest.authorizationUrl).searchParams.get('state');
+    const invalidCodeResponse = await fetch(`${baseUrl}/oauth/google/callback?state=${state}`, {
+      headers: { Cookie: `signal_oauth_state_google=${state}` },
+      redirect: 'manual',
+    });
+    assert.equal(invalidCodeResponse.status, 302);
+    assert.match(invalidCodeResponse.headers.get('location'), /oauth_error=/);
+    assert.match(invalidCodeResponse.headers.get('set-cookie'), /signal_oauth_state_google=.*Expires=/);
+    assert.equal(consumeOAuthState(state), null);
   } finally {
     await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   }

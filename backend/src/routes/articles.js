@@ -30,7 +30,13 @@ function canViewPrivateArticle(user, article) {
 
 function publicAuthor(user) {
   if (!user) return null;
-  const { passwordHash, ...safeUser } = user;
+  const {
+    passwordHash,
+    passwordResetTokenHash,
+    passwordResetTokenExpiresAt,
+    oauthProviders,
+    ...safeUser
+  } = user;
   return safeUser;
 }
 

@@ -244,13 +244,13 @@ function HomePage({ user }) {
       <section className="hero-panel">
         <div className="hero-copy">
           <span className="eyebrow">AI-Powered editorial engine</span>
-          <h1>Publish smarter with trusted, data-informed storytelling.</h1>
+          <h1>Good stories deserve a thoughtful home.</h1>
           <p>
-            A professional CMS for discovery, moderation, analytics, and high-confidence publishing workflows.
+            Write, review, and share useful work with a clear editorial process from first draft to publication.
           </p>
           <div className="hero-actions">
-            <Link to="/auth" className="primary-button">Create account</Link>
-            <Link to="/article/a-1" className="secondary-button">Explore article</Link>
+            {!user && <Link to="/auth" className="primary-button">Create an account</Link>}
+            <Link to={home?.featured?.[0] ? `/article/${home.featured[0].id}` : '/explore'} className="secondary-button">Explore stories</Link>
           </div>
 
           <div className="mini-stats">
@@ -269,32 +269,15 @@ function HomePage({ user }) {
           </div>
         </div>
 
-        <div className="hero-preview">
-          <div className="preview-card">
-            <div className="card-header">
-              <span className="dot dot-purple" />
-              <span className="dot dot-cyan" />
-              <span className="dot dot-slate" />
-            </div>
-            <div className="preview-graph">
-              <div className="bar" style={{ height: '42%' }} />
-              <div className="bar" style={{ height: '52%' }} />
-              <div className="bar" style={{ height: '66%' }} />
-              <div className="bar" style={{ height: '76%' }} />
-              <div className="bar" style={{ height: '92%' }} />
-            </div>
-            <div className="metric-row">
-              <div>
-                <span>Trending score</span>
-                <strong>{home?.trending?.[0]?.score || 0}</strong>
-              </div>
-              <div>
-                <span>AI approval</span>
-                <strong>{home?.recommendations?.length || 0}</strong>
-              </div>
-            </div>
+        {home?.featured?.[0] && <Link className="hero-preview featured-preview" to={`/article/${home.featured[0].id}`}>
+          {home.featured[0].coverImage && <img src={home.featured[0].coverImage} alt="" />}
+          <div className="featured-preview-copy">
+            <span className="eyebrow">A story to start with</span>
+            <h2>{home.featured[0].title}</h2>
+            <p>{home.featured[0].summary}</p>
+            <span className="text-link">Read the story</span>
           </div>
-        </div>
+        </Link>}
       </section>
 
       <section className="section-card">
@@ -303,7 +286,7 @@ function HomePage({ user }) {
             <span className="eyebrow">Featured</span>
             <h2>Editorial picks</h2>
           </div>
-          <Link to="/article/a-1" className="text-link">View the latest</Link>
+          <Link to="/explore" className="text-link">Browse all stories</Link>
         </div>
 
         <div className="card-grid three-up">
@@ -311,7 +294,7 @@ function HomePage({ user }) {
             <article className="story-card" key={article.id}>
               <img src={article.coverImage} alt={article.title} />
               <div className="story-body">
-                <span className="badge">{article.tags[0]}</span>
+                <span className="badge">{article.tags?.[0] || 'Article'}</span>
                 <h3>{article.title}</h3>
                 <p>{article.summary}</p>
                 <Link to={`/article/${article.id}`} className="text-link">Read article</Link>

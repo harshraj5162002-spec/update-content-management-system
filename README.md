@@ -31,6 +31,19 @@ if (-not (Test-Path .\frontend\.env)) { Copy-Item .\frontend\.env.example .\fron
 
 The guarded copy commands only create missing `.env` files; they do not overwrite existing environment settings or credentials. Set a unique `JWT_SECRET` and `MONGODB_URI` in `backend/.env` if MongoDB persistence is desired. Set `VITE_API_BASE_URL` in `frontend/.env` if the API is not at `http://localhost:5000/api`.
 
+## Run a presentation demo on another laptop
+
+For a local presentation, share the GitHub repository URL rather than your personal `.env` file. On the presentation laptop, install Node.js 20.19+ or 22.12+ and Git, then open PowerShell and run:
+
+```powershell
+git clone https://github.com/harshraj5162002-spec/update-content-management-system.git
+Set-Location update-content-management-system
+npm install
+npm run dev
+```
+
+Open the frontend URL printed by Vite (normally `http://localhost:5173`) on that same laptop. MongoDB, Gemini, and SMTP credentials are not required for the seeded local demo; demo changes are held in memory and reset when the backend restarts. The Forgot Password screen is available, but sending reset emails requires the presenter to configure their own SMTP settings in the ignored `backend/.env` file. Never distribute that file or put real credentials in GitHub.
+
 ## Run
 
 From the project root:

@@ -25,6 +25,8 @@ const User = createModel('User', {
   role: { type: String, enum: ['admin', 'author', 'reader'], default: 'reader' },
   status: { type: String, default: 'active' },
   preferences: { type: [String], default: [] },
+  passwordResetTokenHash: { type: String, default: undefined },
+  passwordResetTokenExpiresAt: { type: Date, default: undefined },
 }, [[{ email: 1 }, { unique: true }], [{ role: 1, status: 1 }]]);
 
 const Article = createModel('Article', {
@@ -32,7 +34,7 @@ const Article = createModel('Article', {
   summary: { type: String, default: '' },
   content: { type: String, required: true },
   authorId: { type: String, required: true, index: true },
-  status: { type: String, enum: ['draft', 'pending', 'published', 'quarantined', 'archived'], default: 'draft', index: true },
+  status: { type: String, enum: ['draft', 'pending', 'published', 'quarantined', 'archived', 'rejected', 'changes_requested'], default: 'draft', index: true },
   categoryIds: { type: [String], default: [] },
   tags: { type: [String], default: [] },
   views: { type: Number, default: 0 },

@@ -22,7 +22,7 @@ const { isValidQuiz, normalizeQuiz } = require('../services/quiz');
 const { serializePublicArticle } = require('../services/articleSerialization');
 
 const router = express.Router();
-const articleStatuses = new Set(['draft', 'pending', 'published', 'quarantined', 'archived']);
+const articleStatuses = new Set(['draft', 'pending', 'published', 'quarantined', 'archived', 'rejected', 'changes_requested']);
 
 function canViewPrivateArticle(user, article) {
   return Boolean(user && (user.role === 'admin' || user.id === article.authorId));
@@ -259,7 +259,7 @@ router.post('/:id/submit', requireAuth, authorize('author', 'admin'), asyncHandl
   const article = store.articles.find((item) => item.id === req.params.id);
   if (!article) return res.status(404).json({ message: 'Article not found.' });
   if (!canViewPrivateArticle(req.user, article)) return res.status(403).json({ message: 'You can only submit your own content.' });
-  if (!['draft', 'pending', 'quarantined'].includes(article.status)) {
+  if (!['draft', 'quarantined', 'rejected', 'changes_requested'].includes(article.status)) {
     return res.status(409).json({ message: 'Only drafts and reviewable articles can be submitted.' });
   }
 
@@ -272,13 +272,9 @@ router.post('/:id/submit', requireAuth, authorize('author', 'admin'), asyncHandl
 
   article.moderation = moderateContent(article, store.settings?.moderationThresholds);
   delete article.aiSummaryCache;
-  article.status = article.moderation.status === 'quarantined'
-    ? 'quarantined'
-    : article.moderation.status === 'review'
-      ? 'pending'
-      : 'published';
+  article.status = article.moderation.status === 'quarantined' ? 'quarantined' : 'pending';
   article.updatedAt = new Date().toISOString();
-  if (article.status === 'published') article.publishedAt = article.updatedAt;
+  article.review = { submittedAt: article.updatedAt };
   await saveRecord('articles', article);
   await recordAudit({ actorId: req.user.id, action: 'article.submit', targetType: 'article', targetId: article.id, reason: article.moderation.reasons.join('; '), outcome: article.status });
   res.json({ article, moderation: article.moderation });
@@ -312,6 +308,11 @@ router.put('/:id', requireAuth, authorize('author', 'admin'), (req, res, next) =
   if (req.body.coverImage !== undefined) article.coverImage = req.body.coverImage;
   if (req.body.quiz !== undefined) article.quiz = normalizeQuiz(req.body.quiz);
   if (req.body.status && req.user.role === 'admin' && articleStatuses.has(req.body.status)) article.status = req.body.status;
+  if (req.user.role !== 'admin' && article.status === 'published') {
+    article.status = 'pending';
+    article.review = { ...(article.review || {}), submittedAt: new Date().toISOString() };
+    delete article.publishedAt;
+  }
   article.moderation = moderateContent(article, store.settings?.moderationThresholds);
   article.updatedAt = new Date().toISOString();
   await saveRecord('articles', article);

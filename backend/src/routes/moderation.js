@@ -150,21 +150,39 @@ router.post(
 );
 
 router.post('/articles/:id/decision', [
-  body('decision').isIn(['approve', 'reject', 'quarantine']),
+  body('decision').isIn(['approve', 'reject', 'request_changes', 'quarantine']),
   body('reason').trim().isLength({ min: 3, max: 1000 }),
 ], asyncHandler(async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
   const article = store.articles.find((item) => item.id === req.params.id);
   if (!article) return res.status(404).json({ message: 'Article not found.' });
+  if (!['pending', 'quarantined'].includes(article.status)) {
+    return res.status(409).json({ message: 'Only submissions awaiting review can receive a moderation decision.' });
+  }
+  if (req.body.decision === 'approve' && article.authorId === req.user.id) {
+    return res.status(403).json({ message: 'You cannot approve your own article.' });
+  }
 
   const previousStatus = article.status;
-  const nextStatus = req.body.decision === 'approve' ? 'published' : 'quarantined';
+  const nextStatus = {
+    approve: 'published',
+    reject: 'rejected',
+    request_changes: 'changes_requested',
+    quarantine: 'quarantined',
+  }[req.body.decision];
   article.status = nextStatus;
   article.updatedAt = new Date().toISOString();
+  article.review = {
+    ...(article.review || {}),
+    reviewerId: req.user.id,
+    decision: req.body.decision,
+    feedback: req.body.reason.trim(),
+    reviewedAt: article.updatedAt,
+  };
   article.moderation = {
     ...(article.moderation || {}),
-    status: req.body.decision === 'approve' ? 'approved' : 'blocked',
+    status: req.body.decision === 'approve' ? 'approved' : req.body.decision === 'request_changes' ? 'review' : 'blocked',
     riskScore: article.moderation?.riskScore ?? 0,
     reasons: article.moderation?.reasons || [],
     adminOverride: true,
@@ -187,8 +205,14 @@ router.post('/articles/:id/decision', [
   };
   store.moderationResults.push(record);
   await saveRecord('moderationResults', record);
-  await addNotification(article.authorId, 'moderation', `Your article “${article.title}” was ${req.body.decision === 'approve' ? 'approved' : 'quarantined'}.`);
-  await recordAudit({ actorId: req.user.id, action: 'moderation.override', targetType: 'article', targetId: article.id, reason: req.body.reason, outcome: nextStatus });
+  const notificationText = {
+    approve: 'approved and published',
+    reject: 'rejected',
+    request_changes: 'returned with requested changes',
+    quarantine: 'quarantined',
+  }[req.body.decision];
+  await addNotification(article.authorId, 'moderation', `Your article “${article.title}” was ${notificationText}.`);
+  await recordAudit({ actorId: req.user.id, action: `article.review.${req.body.decision}`, targetType: 'article', targetId: article.id, reason: req.body.reason, outcome: nextStatus });
   res.json({ article, record });
 }));
 
@@ -228,6 +252,9 @@ router.patch('/appeals/:id', [
   if (appeal.status !== 'open') return res.status(409).json({ message: 'Appeal has already been reviewed.' });
   const article = store.articles.find((item) => item.id === appeal.articleId);
   if (!article) return res.status(404).json({ message: 'Appealed article no longer exists.' });
+  if (req.body.decision === 'approve' && article.authorId === req.user.id) {
+    return res.status(403).json({ message: 'You cannot approve your own article.' });
+  }
 
   appeal.status = req.body.decision === 'approve' ? 'approved' : 'upheld';
   appeal.decision = req.body.reason.trim();
@@ -237,6 +264,13 @@ router.patch('/appeals/:id', [
     article.status = 'published';
     article.publishedAt = new Date().toISOString();
     article.updatedAt = article.publishedAt;
+    article.review = {
+      ...(article.review || {}),
+      reviewerId: req.user.id,
+      decision: 'approve',
+      feedback: appeal.decision,
+      reviewedAt: article.updatedAt,
+    };
     article.moderation = { ...(article.moderation || {}), status: 'approved', adminOverride: true, overrideReason: appeal.decision, overriddenBy: req.user.id };
     await saveRecord('articles', article);
   }

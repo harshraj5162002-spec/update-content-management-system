@@ -1,10 +1,13 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const express = require('express');
+const crypto = require('node:crypto');
 const { store } = require('../src/data/store');
 const authRoutes = require('../src/routes/auth');
 const articleRoutes = require('../src/routes/articles');
 const communityRoutes = require('../src/routes/community');
+const moderationRoutes = require('../src/routes/moderation');
+const { optionalAuth, signToken } = require('../src/middleware/auth');
 
 test('reader and author signup, login, and article permissions work end to end', async () => {
   const originalUsers = store.users;
@@ -12,17 +15,22 @@ test('reader and author signup, login, and article permissions work end to end',
   const originalAuditLogs = store.auditLogs;
   const originalEngagementEvents = store.engagementEvents;
   const originalReadingHistory = store.readingHistory;
-  store.users = [...originalUsers];
+  const originalNotifications = store.notifications;
+  const originalModerationResults = store.moderationResults;
+  store.users = structuredClone(originalUsers);
   store.articles = [...originalArticles];
   store.auditLogs = [...originalAuditLogs];
   store.engagementEvents = [...originalEngagementEvents];
   store.readingHistory = [...originalReadingHistory];
+  store.notifications = [...originalNotifications];
+  store.moderationResults = [...originalModerationResults];
 
   const app = express();
   app.use(express.json());
   app.use('/api/auth', authRoutes);
-  app.use('/api/articles', articleRoutes);
+  app.use('/api/articles', optionalAuth, articleRoutes);
   app.use('/api', communityRoutes);
+  app.use('/api/moderation', moderationRoutes);
   const server = app.listen(0, '127.0.0.1');
   await new Promise((resolve, reject) => {
     server.once('listening', resolve);
@@ -55,6 +63,27 @@ test('reader and author signup, login, and article permissions work end to end',
     });
     assert.equal(readerLogin.status, 200);
     assert.equal(readerLogin.payload.user.role, 'reader');
+
+    const resetToken = crypto.randomBytes(32).toString('hex');
+    const resetUser = store.users.find((user) => user.email === 'test-reader@example.com');
+    resetUser.passwordResetTokenHash = crypto.createHash('sha256').update(resetToken).digest('hex');
+    resetUser.passwordResetTokenExpiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    const resetResponse = await request('/auth/password-reset/confirm', {
+      method: 'POST',
+      body: { token: resetToken, password: 'NewReaderPass456!' },
+    });
+    assert.equal(resetResponse.status, 200);
+    const resetReuse = await request('/auth/password-reset/confirm', {
+      method: 'POST',
+      body: { token: resetToken, password: 'AnotherReaderPass789!' },
+    });
+    assert.equal(resetReuse.status, 400);
+    const resetLogin = await request('/auth/login', {
+      method: 'POST',
+      body: { email: 'test-reader@example.com', password: 'NewReaderPass456!' },
+    });
+    assert.equal(resetLogin.status, 200);
+    assert.equal('passwordResetTokenHash' in resetLogin.payload.user, false);
 
     const authorSignup = await request('/auth/signup', {
       method: 'POST',
@@ -136,7 +165,31 @@ test('reader and author signup, login, and article permissions work end to end',
       body: {},
     });
     assert.equal(authorSubmit.status, 200);
-    assert.equal(authorSubmit.payload.article.status, 'published');
+    assert.equal(authorSubmit.payload.article.status, 'pending');
+    const hiddenWhilePending = await request(`/articles/${articleId}`);
+    assert.equal(hiddenWhilePending.status, 404);
+    const hiddenQuizAttempt = await request(`/articles/${articleId}/quiz/attempt`, {
+      method: 'POST',
+      body: { answers: [1] },
+    });
+    assert.equal(hiddenQuizAttempt.status, 404);
+    const publishedBeforeReview = await request('/articles?status=published');
+    assert.equal(publishedBeforeReview.payload.items.some((item) => item.id === articleId), false);
+
+    const authorApproval = await request(`/moderation/articles/${articleId}/decision`, {
+      method: 'POST',
+      token: authorLogin.payload.token,
+      body: { decision: 'approve', reason: 'Attempted self approval.' },
+    });
+    assert.equal(authorApproval.status, 403);
+    const admin = store.users.find((user) => user.role === 'admin');
+    const adminApproval = await request(`/moderation/articles/${articleId}/decision`, {
+      method: 'POST',
+      token: signToken(admin),
+      body: { decision: 'approve', reason: 'Reviewed and approved.' },
+    });
+    assert.equal(adminApproval.status, 200);
+    assert.equal(adminApproval.payload.article.status, 'published');
 
     const publicArticle = await request(`/articles/${articleId}`);
     assert.deepEqual(publicArticle.payload.quiz.questions[0], {
@@ -163,6 +216,33 @@ test('reader and author signup, login, and article permissions work end to end',
     assert.equal(quizAttempt.payload.score, 1);
     assert.equal(quizAttempt.payload.total, 1);
 
+    const authorEditPublished = await request(`/articles/${articleId}`, {
+      method: 'PUT',
+      token: authorLogin.payload.token,
+      body: { title: 'An Updated Editorial Test Story' },
+    });
+    assert.equal(authorEditPublished.status, 200);
+    assert.equal(authorEditPublished.payload.article.status, 'pending');
+    assert.equal((await request(`/articles/${articleId}`)).status, 404);
+
+    const requestChanges = await request(`/moderation/articles/${articleId}/decision`, {
+      method: 'POST',
+      token: signToken(admin),
+      body: { decision: 'request_changes', reason: 'Please add a source for the central claim.' },
+    });
+    assert.equal(requestChanges.status, 200);
+    assert.equal(requestChanges.payload.article.status, 'changes_requested');
+    const authorReview = await request(`/articles/${articleId}`, { token: authorLogin.payload.token });
+    assert.equal(authorReview.payload.review.feedback, 'Please add a source for the central claim.');
+
+    const resubmission = await request(`/articles/${articleId}/submit`, {
+      method: 'POST',
+      token: authorLogin.payload.token,
+      body: {},
+    });
+    assert.equal(resubmission.status, 200);
+    assert.equal(resubmission.payload.article.status, 'pending');
+
     const elevatedSignup = await request('/auth/signup', {
       method: 'POST',
       body: { name: 'Not Admin', email: 'not-admin@example.com', password: 'ReaderPass123!', role: 'admin' },
@@ -175,5 +255,7 @@ test('reader and author signup, login, and article permissions work end to end',
     store.auditLogs = originalAuditLogs;
     store.engagementEvents = originalEngagementEvents;
     store.readingHistory = originalReadingHistory;
+    store.notifications = originalNotifications;
+    store.moderationResults = originalModerationResults;
   }
 });

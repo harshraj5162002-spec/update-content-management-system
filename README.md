@@ -6,7 +6,7 @@ Signal CMS is an existing React and Express content-management application with 
 
 - Public discovery with full-text search, categories, tags, authors, trending stories, and related articles
 - Reader accounts, bookmarks, reading history and progress, comments, notifications, and recommendation feedback
-- Author drafts, article submission, moderation status, freshness checks, and engagement analytics
+- Author drafts, mandatory administrator review before publishing, reviewer feedback and resubmission, freshness checks, and engagement analytics
 - Optional multiple-choice quizzes embedded in articles, with reader scoring
 - Admin moderation queue, reports and appeals, user roles and restrictions, taxonomy, audit events, and settings
 - JWT authentication, role-based authorization, rate limiting, and MongoDB persistence when configured
@@ -76,8 +76,16 @@ Backend (`backend/.env`):
 | `AI_PROVIDER` | AI provider: `local` (default) or `gemini` |
 | `GEMINI_API_KEY` | Gemini API key; required when `AI_PROVIDER=gemini` |
 | `GEMINI_MODEL` | Gemini model name (default `gemini-2.5-flash`) |
+| `FRONTEND_URL` | Public frontend origin used to build password reset links |
+| `SMTP_HOST` | SMTP server hostname used to send password reset email |
+| `SMTP_PORT` | SMTP server port (default `587`) |
+| `SMTP_SECURE` | Set `true` for implicit TLS, otherwise `false` (typically STARTTLS on port 587) |
+| `SMTP_USER` / `SMTP_PASSWORD` | Optional SMTP authentication credentials, if required by the provider |
+| `SMTP_FROM` | Verified sender address shown on password reset emails |
 
 To enable Gemini, set `AI_PROVIDER=gemini` and add your key to `backend/.env`, then restart the backend. Keep the key server-side; do not add it to frontend environment variables. Set `AI_PROVIDER=local` to use the built-in deterministic tools instead. Related-article recommendations remain local.
+
+Password recovery is available from the login page. Configure the SMTP variables above in `backend/.env` and set `FRONTEND_URL` to the correct frontend origin before expecting email delivery. Reset tokens are cryptographically random, stored only as hashes, expire after one hour, and are single-use. Without SMTP host and sender configuration, the API reports that reset email is unavailable; it does not expose reset tokens or pretend to send email.
 
 Frontend (`frontend/.env`):
 
@@ -98,6 +106,8 @@ All endpoints are under `/api`.
 - AI tools: `POST /ai/tools/:tool` (for example `summary`, `writing`, `moderation`, `quality`, or `related`; uses the configured provider)
 - Admin: moderation dashboard and queue, article decisions, reports, appeals, users, audit log, taxonomy, and settings
 
+Author submissions are never published by automated moderation. They remain pending (or quarantined for higher-risk review) until an administrator approves them. Administrators can approve, reject, request changes, or quarantine a submission; authors can see reviewer feedback and resubmit rejected or returned work. Since quizzes are embedded in articles, they are approved as part of the article and are not available until the article is published.
+
 ## Validation
 
 ```powershell
@@ -109,7 +119,7 @@ node --test backend/test/*.test.js
 ## Current limitations
 
 - Gemini-backed tools require a valid API key and may be subject to Google API quotas; local deterministic tools remain available with `AI_PROVIDER=local`.
-- Password reset and email verification need a configured mail-delivery provider and are not implemented.
+- Email delivery depends on a configured SMTP provider; Google/GitHub OAuth and email verification are not implemented.
 - External-link freshness checks are manual and run on demand; there is no scheduler.
 - Without MongoDB, demo data and changes exist only in process memory and are lost on restart.
 - Demo accounts and seed content are for local development; review credentials, secrets, CORS, and database configuration before deployment.

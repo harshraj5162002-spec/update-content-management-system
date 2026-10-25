@@ -68,7 +68,7 @@ function App() {
     navigate('/');
   }
 
-  const isAuthPage = location.pathname === '/auth';
+  const isAuthPage = ['/auth', '/forgot-password', '/reset-password'].includes(location.pathname);
   const readerLinks = [
     { to: '/', label: 'Home', icon: LayoutDashboard },
     ...(token ? [{ to: '/for-you', label: 'For you', icon: Sparkles }] : []),
@@ -165,6 +165,8 @@ function App() {
         <Routes>
           <Route path="/" element={<HomePage user={user} />} />
           <Route path="/auth" element={<AuthPage onLogin={setToken} />} />
+          <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+          <Route path="/reset-password" element={<ResetPasswordPage />} />
           <Route path="/article/:id" element={<ArticlePage token={token} />} />
           <Route path="/for-you" element={<ArticleCollectionPage title="For you" endpoint="/recommendations" authenticated />} />
           <Route path="/trending" element={<ArticleCollectionPage title="Trending now" endpoint="/trending" />} />
@@ -787,6 +789,7 @@ function AuthPage({ onLogin }) {
           <button type="submit" className="primary-button full-width" disabled={loading}>
             {loading ? 'Please wait…' : mode === 'login' ? 'Login' : 'Create account'}
           </button>
+          {mode === 'login' && <Link className="text-link" to="/forgot-password">Forgot password?</Link>}
         </form>
 
         <div className="demo-note">
@@ -796,6 +799,90 @@ function AuthPage({ onLogin }) {
       </section>
     </main>
   );
+}
+
+function ForgotPasswordPage() {
+  const [email, setEmail] = useState('');
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  async function requestReset(event) {
+    event.preventDefault();
+    setLoading(true);
+    setError('');
+    setMessage('');
+    try {
+      const result = await apiRequest('/auth/password-reset/request', {
+        method: 'POST',
+        body: JSON.stringify({ email }),
+      });
+      setMessage(result.message);
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return <main className="auth-layout"><section className="auth-panel auth-form-panel">
+    <span className="eyebrow">Account recovery</span>
+    <h1>Forgot your password?</h1>
+    <p className="muted-copy">Enter your account email. If it is registered, we’ll send a secure reset link.</p>
+    <form className="auth-form" onSubmit={requestReset}>
+      <label>Email<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} required autoComplete="email" /></label>
+      {error && <div className="error-panel inline-error" role="alert">{error}</div>}
+      {message && <p className="success-message" role="status">{message}</p>}
+      <button className="primary-button full-width" type="submit" disabled={loading}>{loading ? 'Sending…' : 'Send reset link'}</button>
+      <Link className="text-link" to="/auth">Back to login</Link>
+    </form>
+  </section></main>;
+}
+
+function ResetPasswordPage() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const resetToken = new URLSearchParams(location.search).get('token') || '';
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  async function resetPassword(event) {
+    event.preventDefault();
+    setError('');
+    setMessage('');
+    if (password !== confirmPassword) {
+      setError('Passwords do not match.');
+      return;
+    }
+    setLoading(true);
+    try {
+      const result = await apiRequest('/auth/password-reset/confirm', {
+        method: 'POST',
+        body: JSON.stringify({ token: resetToken, password }),
+      });
+      setMessage(result.message);
+    } catch (resetError) {
+      setError(resetError.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return <main className="auth-layout"><section className="auth-panel auth-form-panel">
+    <span className="eyebrow">Account recovery</span>
+    <h1>Set a new password</h1>
+    {resetToken ? <form className="auth-form" onSubmit={resetPassword}>
+      <label>New password<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} required minLength={8} autoComplete="new-password" /></label>
+      <label>Confirm new password<input type="password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} required minLength={8} autoComplete="new-password" /></label>
+      {error && <div className="error-panel inline-error" role="alert">{error}</div>}
+      {message && <p className="success-message" role="status">{message}</p>}
+      {message ? <button className="primary-button full-width" type="button" onClick={() => navigate('/auth')}>Go to login</button> : <button className="primary-button full-width" type="submit" disabled={loading}>{loading ? 'Updating…' : 'Update password'}</button>}
+    </form> : <div className="error-panel inline-error" role="alert">This reset link is missing or invalid. Request a new one to continue.</div>}
+    <Link className="text-link" to="/forgot-password">Request another reset link</Link>
+  </section></main>;
 }
 
 function AuthorDashboardPage({ user }) {
@@ -926,7 +1013,7 @@ function AdminDashboardPage() {
             <span key={topic.name} className="category-pill">{topic.name} · {topic.count}</span>
           ))}
         </div>
-        <p className="muted-copy">Default approval thresholds: risk 0–29 auto-approved, 30–69 reviewed, 70–100 quarantined. Safety overrides may quarantine content earlier.</p>
+        <p className="muted-copy">Risk scores prioritize review: low-risk submissions still require administrator approval, while higher-risk content may be quarantined for closer review.</p>
       </section>
     </main>
   );
@@ -1169,7 +1256,7 @@ function AuthorArticlesPage({ user }) {
   }, [user?.id]);
   if (!user || !['author', 'admin'].includes(user.role)) return <AccessNotice message="Sign in with an author or admin account to manage articles." />;
   return <main className="page-content"><PageHeading eyebrow="Author workspace" title="My articles" action={<Link to="/author/new" className="primary-button"><PenLine size={16} />New article</Link>} />
-    {error ? <div className="page-panel error-panel">{error}</div> : <div className="table-wrap section-card"><table><thead><tr><th>Article</th><th>Status</th><th>Risk</th><th>Updated</th><th>Actions</th></tr></thead><tbody>{items.map((article) => <tr key={article.id}><td>{article.title}</td><td><span className="status-badge">{article.status}</span></td><td>{article.moderation?.riskScore ?? '—'}</td><td>{new Date(article.updatedAt || article.createdAt).toLocaleDateString()}</td><td><Link className="text-link" to={article.status === 'published' ? `/article/${article.id}` : `/author/edit/${article.id}`}>{article.status === 'published' ? 'View' : 'Edit'}</Link></td></tr>)}</tbody></table>{!items.length && <p className="muted-copy">You haven’t created any articles yet.</p>}</div>}
+    {error ? <div className="page-panel error-panel">{error}</div> : <div className="table-wrap section-card"><table><thead><tr><th>Article</th><th>Status</th><th>Risk</th><th>Updated</th><th>Actions</th></tr></thead><tbody>{items.map((article) => <tr key={article.id}><td>{article.title}{article.review?.feedback && <small className="reason-line">Reviewer feedback: {article.review.feedback}</small>}</td><td><span className="status-badge">{article.status}</span></td><td>{article.moderation?.riskScore ?? '—'}</td><td>{new Date(article.updatedAt || article.createdAt).toLocaleDateString()}</td><td><Link className="text-link" to={article.status === 'published' ? `/article/${article.id}` : `/author/edit/${article.id}`}>{article.status === 'published' ? 'View' : 'Edit'}</Link></td></tr>)}</tbody></table>{!items.length && <p className="muted-copy">You haven’t created any articles yet.</p>}</div>}
   </main>;
 }
 
@@ -1177,6 +1264,7 @@ function ArticleEditorPage({ user, token }) {
   const { id } = useParams();
   const navigate = useNavigate();
   const [form, setForm] = useState({ title: '', summary: '', content: '', tags: '', categoryIds: [], coverImage: '', quiz: null });
+  const [articleReview, setArticleReview] = useState(null);
   const [categories, setCategories] = useState([]);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -1185,7 +1273,10 @@ function ArticleEditorPage({ user, token }) {
   const [suggesting, setSuggesting] = useState(false);
   useEffect(() => {
     apiRequest('/categories').then(setCategories).catch((loadError) => setError(loadError.message));
-    if (id) apiRequest(`/articles/${id}`).then((article) => setForm({ title: article.title, summary: article.summary, content: article.content, tags: (article.tags || []).join(', '), categoryIds: article.categoryIds || [], coverImage: article.coverImage || '', quiz: article.quiz || null })).catch((loadError) => setError(loadError.message));
+    if (id) apiRequest(`/articles/${id}`).then((article) => {
+      setForm({ title: article.title, summary: article.summary, content: article.content, tags: (article.tags || []).join(', '), categoryIds: article.categoryIds || [], coverImage: article.coverImage || '', quiz: article.quiz || null });
+      setArticleReview({ status: article.status, review: article.review });
+    }).catch((loadError) => setError(loadError.message));
   }, [id]);
   if (!token) return <AccessNotice message="Sign in with an author or admin account to write articles." />;
   if (!user) return <div className="page-panel">Checking your account…</div>;
@@ -1206,7 +1297,7 @@ function ArticleEditorPage({ user, token }) {
         const submission = await apiRequest(`/articles/${article.id}/submit`, { method: 'POST', body: JSON.stringify({}) });
         setMessage(`Article ${submission.article.status}. ${submission.moderation.reasons.join(' ')}`);
       } else {
-        setMessage('Draft saved.');
+        setMessage(article.status === 'pending' ? 'Changes saved. This article is awaiting admin approval.' : 'Draft saved.');
       }
       if (!id || submitForReview) navigate('/author/articles');
     } catch (saveError) { setError(saveError.message); }
@@ -1264,8 +1355,9 @@ function ArticleEditorPage({ user, token }) {
     setSuggestions((current) => current.filter((item) => item !== suggestion));
   }
 
-  return <main className="page-content"><PageHeading eyebrow="Author workspace" title={id ? 'Edit article' : 'Write an article'} description="Save a draft at any time; submission runs local moderation and approval checks." />
+  return <main className="page-content"><PageHeading eyebrow="Author workspace" title={id ? 'Edit article' : 'Write an article'} description="Submitted articles and quizzes require administrator approval before publication." />
     <form className="section-card editor-form" onSubmit={(event) => save(event)}>
+      {articleReview && <div className="note-card"><strong>Current status: {articleReview.status}</strong>{articleReview.review?.feedback && <p>Reviewer feedback: {articleReview.review.feedback}</p>}</div>}
       <div className="editor-toolbar"><span className="muted-copy">AI suggestions never overwrite your draft automatically.</span><button type="button" className="secondary-button" disabled={suggesting} onClick={suggestImprovements}><Sparkles size={15} />{suggesting ? 'Analyzing…' : 'Suggest improvements'}</button></div>
       {suggestions.map((suggestion) => <div className="suggestion-card" key={`${suggestion.type}-${suggestion.value}`}><div><strong>{suggestion.type}</strong><p>{Array.isArray(suggestion.value) ? suggestion.value.join(', ') : suggestion.value}</p><small>{suggestion.reason}</small></div><div className="button-row"><button type="button" className="primary-button" onClick={() => applySuggestion(suggestion)}>Apply</button><button type="button" className="secondary-button" onClick={() => setSuggestions((current) => current.filter((item) => item !== suggestion))}>Dismiss</button></div></div>)}
       <label>Title<input value={form.title} maxLength={180} minLength={4} required onChange={(event) => setForm({ ...form, title: event.target.value })} /></label>
@@ -1417,10 +1509,14 @@ function ReviewQueuePage() {
   const [items, setItems] = useState([]);
   const [error, setError] = useState('');
   const [busyId, setBusyId] = useState('');
-  const [reason, setReason] = useState('Reviewed by an administrator.');
+  const [reason, setReason] = useState('');
   const load = () => apiRequest('/moderation/queue').then((data) => setItems(data.items || [])).catch((loadError) => setError(loadError.message));
   useEffect(() => { load(); }, []);
   async function decide(articleId, decision) {
+    if (reason.trim().length < 3) {
+      setError('Enter a review reason of at least 3 characters before making a decision.');
+      return;
+    }
     setBusyId(articleId);
     try {
       await apiRequest(`/moderation/articles/${articleId}/decision`, { method: 'POST', body: JSON.stringify({ decision, reason }) });
@@ -1428,10 +1524,10 @@ function ReviewQueuePage() {
     } catch (actionError) { setError(actionError.message); }
     finally { setBusyId(''); }
   }
-  return <main className="page-content"><PageHeading eyebrow="Trust & safety" title="Moderation review queue" description="Review pending and quarantined submissions. Every override is recorded in the audit history." />
-    <label className="editor-label">Decision reason<input value={reason} maxLength={1000} onChange={(event) => setReason(event.target.value)} /></label>
+  return <main className="page-content"><PageHeading eyebrow="Trust & safety" title="Moderation review queue" description="Review pending and quarantined submissions, including their article quizzes. Every decision is recorded in the audit history." />
+    <label className="editor-label">Decision reason<textarea value={reason} minLength={3} maxLength={1000} required onChange={(event) => setReason(event.target.value)} /></label>
     {error && <div className="page-panel error-panel">{error}</div>}
-    {items.length ? <div className="review-list">{items.map((article) => <article className="section-card review-card" key={article.id}><div><span className="status-badge">{article.status}</span><h2>{article.title}</h2><p>{article.summary}</p><small>Risk {article.moderation?.riskScore ?? 0} · {article.moderation?.reasons?.join(', ')}</small><p className="muted-copy">{article.content}</p></div><div className="button-row"><button className="primary-button" disabled={busyId === article.id} onClick={() => decide(article.id, 'approve')}>Approve & publish</button><button className="secondary-button" disabled={busyId === article.id} onClick={() => decide(article.id, 'quarantine')}>Keep quarantined</button></div></article>)}</div> : <div className="empty-state">The review queue is clear.</div>}
+    {items.length ? <div className="review-list">{items.map((article) => <article className="section-card review-card" key={article.id}><div><span className="status-badge">{article.status}</span><h2>{article.title}</h2><p>{article.summary}</p><small>Risk {article.moderation?.riskScore ?? 0} · {article.moderation?.reasons?.join(', ')}</small><p className="muted-copy">{article.content}</p>{article.quiz?.questions?.map((question, index) => <div className="note-card" key={`${article.id}-quiz-${index}`}><strong>Quiz {index + 1}: {question.prompt}</strong><p>{question.options.map((option, optionIndex) => `${optionIndex + 1}. ${option}${optionIndex === question.correctOptionIndex ? ' (correct)' : ''}`).join(' · ')}</p></div>)}</div><div className="button-row"><button className="primary-button" disabled={busyId === article.id} onClick={() => decide(article.id, 'approve')}>Approve & publish</button><button className="secondary-button" disabled={busyId === article.id} onClick={() => decide(article.id, 'request_changes')}>Request changes</button><button className="secondary-button" disabled={busyId === article.id} onClick={() => decide(article.id, 'reject')}>Reject</button><button className="secondary-button" disabled={busyId === article.id} onClick={() => decide(article.id, 'quarantine')}>Quarantine</button></div></article>)}</div> : <div className="empty-state">The review queue is clear.</div>}
   </main>;
 }
 
@@ -1480,7 +1576,7 @@ function AdminArticlesPage() {
       .catch((loadError) => setError(loadError.message));
   }, [status]);
   return <main className="page-content"><PageHeading eyebrow="Administration" title="Article management" description="Inspect all article states, including drafts, pending submissions and quarantined work." />
-    <label className="sort-select">Status<select value={status} onChange={(event) => setStatus(event.target.value)}><option value="">All articles</option><option value="draft">Drafts</option><option value="pending">Pending</option><option value="published">Published</option><option value="quarantined">Quarantined</option><option value="archived">Archived</option></select></label>
+    <label className="sort-select">Status<select value={status} onChange={(event) => setStatus(event.target.value)}><option value="">All articles</option><option value="draft">Drafts</option><option value="pending">Pending</option><option value="changes_requested">Changes requested</option><option value="rejected">Rejected</option><option value="published">Published</option><option value="quarantined">Quarantined</option><option value="archived">Archived</option></select></label>
     {error && <div className="page-panel error-panel">{error}</div>}
     <div className="table-wrap section-card"><table><thead><tr><th>Title</th><th>Author</th><th>Status</th><th>Risk</th><th>Updated</th><th>Open</th></tr></thead><tbody>{items.map((article) => <tr key={article.id}><td>{article.title}</td><td>{article.authorId}</td><td>{article.status}</td><td>{article.moderation?.riskScore ?? '—'}</td><td>{new Date(article.updatedAt || article.createdAt).toLocaleDateString()}</td><td><Link className="text-link" to={article.status === 'published' ? `/article/${article.id}` : `/author/edit/${article.id}`}>View</Link></td></tr>)}</tbody></table>{!items.length && <p className="muted-copy">No matching articles.</p>}</div>
   </main>;
@@ -1624,7 +1720,7 @@ function AdminSettingsPage() {
     } catch (saveError) { setError(saveError.message); }
   }
   return <main className="page-content"><PageHeading eyebrow="Administration" title="System settings" description="Configure deterministic moderation thresholds for new article submissions." />
-    <form className="section-card editor-form" onSubmit={save}><label>Maximum risk score for automatic approval<input type="number" min="0" max="98" value={thresholds.autoApprove} onChange={(event) => setThresholds({ ...thresholds, autoApprove: event.target.value })} /></label><label>Maximum risk score before quarantine<input type="number" min="1" max="100" value={thresholds.review} onChange={(event) => setThresholds({ ...thresholds, review: event.target.value })} /></label><p className="muted-copy">Scores above the auto-approval threshold require review; scores above the review threshold are quarantined. Mandatory safety overrides may quarantine content earlier.</p>{error && <div className="error-panel inline-error">{error}</div>}{message && <p className="success-message">{message}</p>}<button className="primary-button" type="submit">Save settings</button></form>
+    <form className="section-card editor-form" onSubmit={save}><label>Maximum risk score for low-risk classification<input type="number" min="0" max="98" value={thresholds.autoApprove} onChange={(event) => setThresholds({ ...thresholds, autoApprove: event.target.value })} /></label><label>Maximum risk score before quarantine<input type="number" min="1" max="100" value={thresholds.review} onChange={(event) => setThresholds({ ...thresholds, review: event.target.value })} /></label><p className="muted-copy">These thresholds classify moderation risk only; every submission still requires administrator approval before publication. Scores above the review threshold are quarantined for closer review.</p>{error && <div className="error-panel inline-error">{error}</div>}{message && <p className="success-message">{message}</p>}<button className="primary-button" type="submit">Save settings</button></form>
   </main>;
 }
 

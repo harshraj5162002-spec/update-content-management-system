@@ -960,6 +960,26 @@ th {
 .suggestion-card p { margin: 0; }
 .suggestion-card small { color: var(--text-muted); }
 .suggestion-card .button-row { flex: 0 0 auto; }
+.editor-copilot { display: grid; gap: 12px; padding: 18px; border: 1px solid var(--line); border-radius: 8px; background: #f8f9f7; }
+.editor-copilot .section-header { align-items: center; margin-bottom: 0; }
+.editor-copilot .section-header h2 { margin: 0; font-size: 1.15rem; }
+.editor-copilot .eyebrow { margin-bottom: 4px; }
+.copilot-role { padding: 4px 8px; border-radius: 4px; color: var(--accent); background: #e9f0ec; font-size: .74rem; font-weight: 650; text-transform: capitalize; }
+.copilot-thread { display: grid; gap: 9px; max-height: 330px; overflow: auto; }
+.copilot-thread > .muted-copy { margin: 0; }
+.copilot-message { padding: 12px; border: 1px solid var(--line); border-radius: 7px; background: #fff; }
+.copilot-message.user { margin-left: 32px; background: #f1f4f1; }
+.copilot-message > strong { color: var(--text); font-size: .8rem; text-transform: capitalize; }
+.copilot-message > p { margin: 6px 0; color: #46534f; font-size: .86rem; line-height: 1.55; }
+.copilot-message.error { border-color: #eed3cf; background: #fbefed; }
+.copilot-suggestion { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
+.copilot-suggestion > div { display: grid; gap: 3px; }
+.copilot-suggestion > div > strong { color: var(--accent); font-size: .75rem; text-transform: capitalize; }
+.copilot-suggestion p { margin: 0; color: var(--text); font-size: .84rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+.copilot-suggestion small, .copilot-note { color: var(--text-muted); font-size: .74rem; line-height: 1.5; }
+.copilot-compose { display: flex; gap: 8px; }
+.copilot-compose input { flex: 1; min-width: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; background: #fff; color: var(--text); }
+.copilot-compose input:focus-visible { outline: 2px solid rgba(49, 91, 82, .2); }
 .search-suggestions { margin-top: 12px; }
 .editor-form > label, .editor-label { display: grid; gap: 7px; color: var(--text-muted); font-size: .85rem; }
 .editor-form input, .editor-form textarea, .editor-form select, .editor-label input { width: 100%; padding: 11px 13px; border: 1px solid var(--line); border-radius: 10px; color: var(--text); background: rgba(255,255,255,.035); }
@@ -1340,6 +1360,8 @@ th, td { border-color: var(--line); }
   .notification-item { align-items: flex-start; flex-wrap: wrap; }
   .notification-item .button-row { margin-left: 28px; }
   .suggestion-card { flex-direction: column; }
+  .copilot-compose { flex-direction: column; }
+  .copilot-message.user { margin-left: 12px; }
   .auth-shell .topbar { flex-direction: row; }
   .auth-shell .workspace-main { min-width: 0; }
   .page-content { gap: 14px; }

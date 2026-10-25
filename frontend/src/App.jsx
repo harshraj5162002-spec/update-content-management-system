@@ -1254,6 +1254,9 @@ function ArticleEditorPage({ user, token }) {
   const [message, setMessage] = useState('');
   const [suggestions, setSuggestions] = useState([]);
   const [suggesting, setSuggesting] = useState(false);
+  const [assistantInput, setAssistantInput] = useState('');
+  const [assistantMessages, setAssistantMessages] = useState([]);
+  const [assistantLoading, setAssistantLoading] = useState(false);
   useEffect(() => {
     apiRequest('/categories').then(setCategories).catch((loadError) => setError(loadError.message));
     if (id) apiRequest(`/articles/${id}`).then((article) => {
@@ -1338,10 +1341,73 @@ function ArticleEditorPage({ user, token }) {
     setSuggestions((current) => current.filter((item) => item !== suggestion));
   }
 
+  async function askAssistant(event) {
+    event?.preventDefault();
+    const prompt = assistantInput.trim();
+    if (!prompt || assistantLoading) return;
+    setAssistantMessages((current) => [...current, { role: 'user', text: prompt }]);
+    setAssistantInput('');
+    setAssistantLoading(true);
+    try {
+      const response = await apiRequest('/ai/assistant', {
+        method: 'POST',
+        body: JSON.stringify({
+          message: prompt,
+          article: {
+            title: form.title,
+            summary: form.summary,
+            content: form.content,
+            tags: form.tags.split(',').map((tag) => tag.trim()).filter(Boolean),
+          },
+        }),
+      });
+      setAssistantMessages((current) => [...current, {
+        role: 'assistant',
+        text: response.text,
+        note: response.note,
+        action: response.action,
+        suggestions: response.suggestions || [],
+      }]);
+    } catch (assistantError) {
+      setAssistantMessages((current) => [...current, { role: 'assistant', text: assistantError.message, error: true }]);
+    } finally {
+      setAssistantLoading(false);
+    }
+  }
+
   return <main className="page-content"><PageHeading eyebrow="Author workspace" title={id ? 'Edit article' : 'Write an article'} description="Submitted articles and quizzes require administrator approval before publication." />
     <form className="section-card editor-form" onSubmit={(event) => save(event)}>
       {articleReview && <div className="note-card"><strong>Current status: {articleReview.status}</strong>{articleReview.review?.feedback && <p>Reviewer feedback: {articleReview.review.feedback}</p>}</div>}
       <div className="editor-toolbar"><span className="muted-copy">AI suggestions never overwrite your draft automatically.</span><button type="button" className="secondary-button" disabled={suggesting} onClick={suggestImprovements}><Sparkles size={15} />{suggesting ? 'Analyzing…' : 'Suggest improvements'}</button></div>
+      <section className="editor-copilot" aria-labelledby="editor-copilot-title">
+        <div className="section-header">
+          <div><span className="eyebrow">Writing assistant</span><h2 id="editor-copilot-title">Ask about this draft</h2></div>
+          <span className="copilot-role">{user.role === 'admin' ? 'Admin tools' : 'Author tools'}</span>
+        </div>
+        <div className="copilot-thread" aria-live="polite">
+          {!assistantMessages.length && <p className="muted-copy">Ask for title ideas, a summary, tags, writing suggestions, or a quality check. Admins can also request an advisory moderation analysis.</p>}
+          {assistantMessages.map((entry, index) => <article className={`copilot-message ${entry.role}${entry.error ? ' error' : ''}`} key={`${entry.role}-${index}`}>
+            <strong>{entry.role === 'user' ? 'You' : 'Copilot'}{entry.action ? ` · ${entry.action}` : ''}</strong>
+            <p>{entry.text}</p>
+            {entry.suggestions?.map((suggestion, suggestionIndex) => <div className="copilot-suggestion" key={`${index}-${suggestionIndex}`}>
+              <div><strong>{suggestion.type === 'note' ? 'Editorial note' : suggestion.type}</strong><p>{Array.isArray(suggestion.value) ? suggestion.value.join(', ') : suggestion.value}</p>{suggestion.reason && <small>{suggestion.reason}</small>}</div>
+              {['title', 'summary', 'tags'].includes(suggestion.type) && <button type="button" className="secondary-button" onClick={() => applySuggestion(suggestion)}>Apply</button>}
+            </div>)}
+            {entry.note && <small className="copilot-note">{entry.note}</small>}
+          </article>)}
+          {assistantLoading && <p className="muted-copy" role="status">Copilot is reviewing the draft…</p>}
+        </div>
+        <div className="copilot-compose">
+          <input aria-label="Ask the writing assistant" value={assistantInput} maxLength={1000} placeholder="e.g. Suggest a clearer title" onChange={(event) => setAssistantInput(event.target.value)} onKeyDown={(event) => {
+            if (event.key === 'Enter' && !event.shiftKey) {
+              event.preventDefault();
+              askAssistant();
+            }
+          }} />
+          <button type="button" className="primary-button" disabled={!assistantInput.trim() || assistantLoading} onClick={askAssistant}>{assistantLoading ? 'Thinking…' : 'Ask copilot'}</button>
+        </div>
+        <small className="copilot-note">Suggestions are optional. The copilot cannot publish content or bypass administrator approval.</small>
+      </section>
       {suggestions.map((suggestion) => <div className="suggestion-card" key={`${suggestion.type}-${suggestion.value}`}><div><strong>{suggestion.type}</strong><p>{Array.isArray(suggestion.value) ? suggestion.value.join(', ') : suggestion.value}</p><small>{suggestion.reason}</small></div><div className="button-row"><button type="button" className="primary-button" onClick={() => applySuggestion(suggestion)}>Apply</button><button type="button" className="secondary-button" onClick={() => setSuggestions((current) => current.filter((item) => item !== suggestion))}>Dismiss</button></div></div>)}
       <label>Title<input value={form.title} maxLength={180} minLength={4} required onChange={(event) => setForm({ ...form, title: event.target.value })} /></label>
       <label>Summary<textarea value={form.summary} maxLength={500} onChange={(event) => setForm({ ...form, summary: event.target.value })} /></label>

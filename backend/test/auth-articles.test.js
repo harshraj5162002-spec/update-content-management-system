@@ -7,6 +7,7 @@ const authRoutes = require('../src/routes/auth');
 const articleRoutes = require('../src/routes/articles');
 const communityRoutes = require('../src/routes/community');
 const moderationRoutes = require('../src/routes/moderation');
+const aiRoutes = require('../src/routes/ai');
 const { optionalAuth, signToken } = require('../src/middleware/auth');
 
 test('reader and author signup, login, and article permissions work end to end', async () => {
@@ -31,6 +32,7 @@ test('reader and author signup, login, and article permissions work end to end',
   app.use('/api/articles', optionalAuth, articleRoutes);
   app.use('/api', communityRoutes);
   app.use('/api/moderation', moderationRoutes);
+  app.use('/api/ai', aiRoutes);
   const server = app.listen(0, '127.0.0.1');
   await new Promise((resolve, reject) => {
     server.once('listening', resolve);
@@ -63,6 +65,12 @@ test('reader and author signup, login, and article permissions work end to end',
     });
     assert.equal(readerLogin.status, 200);
     assert.equal(readerLogin.payload.user.role, 'reader');
+    const readerCopilot = await request('/ai/assistant', {
+      method: 'POST',
+      token: readerLogin.payload.token,
+      body: { message: 'Suggest a title', article: { title: 'Short title', content: 'A short article draft with enough text.' } },
+    });
+    assert.equal(readerCopilot.status, 403);
 
     const resetToken = crypto.randomBytes(32).toString('hex');
     const resetUser = store.users.find((user) => user.email === 'test-reader@example.com');
@@ -97,6 +105,15 @@ test('reader and author signup, login, and article permissions work end to end',
     });
     assert.equal(authorLogin.status, 200);
     assert.equal(authorLogin.payload.user.role, 'author');
+    const authorCopilot = await request('/ai/assistant', {
+      method: 'POST',
+      token: authorLogin.payload.token,
+      body: { message: 'Suggest a title', article: { title: 'Short title', content: 'A short article draft with enough text.' } },
+    });
+    assert.equal(authorCopilot.status, 200);
+    assert.equal(authorCopilot.payload.action, 'title');
+    assert.ok(authorCopilot.payload.suggestions.some((suggestion) => suggestion.type === 'title'));
+    assert.match(authorCopilot.payload.note, /requires administrator approval/i);
 
     const publishedArticle = await request('/articles/a-1', { token: readerLogin.payload.token });
     assert.equal(publishedArticle.status, 200);
@@ -183,6 +200,15 @@ test('reader and author signup, login, and article permissions work end to end',
     });
     assert.equal(authorApproval.status, 403);
     const admin = store.users.find((user) => user.role === 'admin');
+    const adminCopilot = await request('/ai/assistant', {
+      method: 'POST',
+      token: signToken(admin),
+      body: { message: 'Run a moderation risk analysis', article: { title: 'A review title', content: 'An ordinary editorial article draft.' } },
+    });
+    assert.equal(adminCopilot.status, 200);
+    assert.equal(adminCopilot.payload.action, 'moderation');
+    assert.match(adminCopilot.payload.text, /advisory signal/i);
+
     const adminApproval = await request(`/moderation/articles/${articleId}/decision`, {
       method: 'POST',
       token: signToken(admin),

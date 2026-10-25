@@ -11,6 +11,83 @@ const { serializePublicArticle } = require('../services/articleSerialization');
 const router = express.Router();
 const supportedTools = new Set(['summary', 'summarizer', 'writing', 'improve', 'moderation', 'quality', 'topics', 'tags', 'title', 'grammar', 'related']);
 
+function selectAssistantTool(message, role) {
+  const request = message.toLowerCase();
+  if (role === 'admin' && /\b(moderat|risk|spam|abuse|safety|review)\b|मॉडरेशन|जोखिम|स्पैम/.test(request)) return 'moderation';
+  if (/\b(summar|summary|shorten|brief)\b|सारांश|संक्षेप/.test(request)) return 'summary';
+  if (/\b(title|headline|heading)\b|शीर्षक/.test(request)) return 'title';
+  if (/\b(tag|keyword|topic)\b|टैग|कीवर्ड|विषय/.test(request)) return 'tags';
+  if (/\b(quality|grammar|readability|duplicate|structure)\b|गुणवत्ता|व्याकरण|पठनीयता/.test(request)) return 'quality';
+  return 'writing';
+}
+
+function assistantReply(tool, result) {
+  let suggestions = Array.isArray(result?.suggestions)
+    ? result.suggestions.map((suggestion) => typeof suggestion === 'string'
+      ? { type: 'note', value: suggestion, reason: 'Editorial check' }
+      : suggestion)
+    : [];
+  if (tool === 'tags' && suggestions.length && suggestions.every((suggestion) => suggestion.type === 'note')) {
+    suggestions = [{ type: 'tags', value: suggestions.map((suggestion) => suggestion.value), reason: 'Suggested from the current draft.' }];
+  }
+  if (tool === 'summary' && result?.summary) {
+    suggestions.unshift({ type: 'summary', value: result.summary, reason: 'Summary based on the current draft.' });
+  }
+  if (tool === 'moderation') {
+    return {
+      text: `Moderation analysis: ${result.status || 'review'} risk category, score ${result.riskScore ?? 'unavailable'}. This is an advisory signal, not an approval decision.`,
+      suggestions,
+    };
+  }
+  if (suggestions.length) {
+    return {
+      text: `I reviewed the current draft and found ${suggestions.length} ${suggestions.length === 1 ? 'suggestion' : 'suggestions'}. Review each one and apply only what you want.`,
+      suggestions,
+    };
+  }
+  return {
+    text: tool === 'summary'
+      ? 'I could not create a summary from this draft yet. Add some article content and try again.'
+      : 'I did not find a specific change to suggest. You can ask for a title, summary, tags, writing improvements, or a quality check.',
+    suggestions,
+  };
+}
+
+router.post('/assistant', requireAuth, asyncHandler(async (req, res) => {
+  if (!['author', 'admin'].includes(req.user.role)) {
+    return res.status(403).json({ message: 'The editorial copilot is available to authors and administrators.' });
+  }
+  const message = typeof req.body.message === 'string' ? req.body.message.trim() : '';
+  if (!message || message.length > 1000) {
+    return res.status(400).json({ message: 'Enter a request between 1 and 1000 characters.' });
+  }
+  const article = req.body.article && typeof req.body.article === 'object' && !Array.isArray(req.body.article)
+    ? req.body.article
+    : {};
+  const contentLength = `${article.title || ''}${article.summary || ''}${article.content || ''}`.length;
+  if (contentLength > 100000) return res.status(413).json({ message: 'Article content exceeds the AI assistant limit.' });
+
+  const tool = selectAssistantTool(message, req.user.role);
+  let result;
+  if (aiProvider === 'gemini') {
+    try {
+      result = await generateGeminiAITool(tool, article, store.articles);
+    } catch (error) {
+      if (error.code !== 'GEMINI_API_ERROR') throw error;
+      return res.status(502).json({ message: error.message });
+    }
+  } else {
+    result = runAITool(tool, article, store.articles);
+  }
+  const reply = assistantReply(tool, result || {});
+  res.json({
+    ...reply,
+    action: tool,
+    provider: aiProvider,
+    note: 'Suggestions do not edit or publish the article unless you choose to apply them. Publication still requires administrator approval.',
+  });
+}));
+
 router.post('/tools/:tool', requireAuth, asyncHandler(async (req, res) => {
   const { tool } = req.params;
   if (!supportedTools.has(tool)) return res.status(404).json({ message: 'AI tool not found.' });

@@ -4,7 +4,7 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const morgan = require('morgan');
 const { connectDb } = require('./config/db');
-const { port, corsOrigins } = require('./config/env');
+const { port, corsOrigins, trustProxy } = require('./config/env');
 const { store } = require('./data/store');
 const { hydrateStore } = require('./data/persistence');
 const authRoutes = require('./routes/auth');
@@ -17,6 +17,12 @@ const { getTrendingArticles, getRecommendationsForUser, getTopicSnapshot } = req
 const { serializePublicArticle } = require('./services/articleSerialization');
 
 const app = express();
+
+// Behind a reverse proxy/load balancer, set TRUST_PROXY to the number of proxy hops (for example 1) so rate
+// limiting and view de-duplication use each visitor's real IP instead of the proxy's.
+if (trustProxy) {
+  app.set('trust proxy', /^\d+$/.test(trustProxy) ? Number(trustProxy) : trustProxy);
+}
 
 app.use(cors({
   origin(origin, callback) {

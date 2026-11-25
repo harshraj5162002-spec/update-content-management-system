@@ -19,6 +19,11 @@ module.exports = {
   jwtSecret,
   mongoUri: process.env.MONGODB_URI || '',
   nodeEnv,
+  trustProxy: process.env.TRUST_PROXY || '',
+  // Demo users/articles are only seeded into a real database outside production unless explicitly requested.
+  seedDemoData: process.env.SEED_DEMO_DATA
+    ? process.env.SEED_DEMO_DATA === 'true'
+    : nodeEnv !== 'production',
   corsOrigins: [...new Set([
     ...(process.env.CORS_ORIGIN || defaultCorsOrigins.join(',')).split(',').map((origin) => origin.trim()).filter(Boolean),
     ...(nodeEnv === 'development' ? defaultCorsOrigins : []),

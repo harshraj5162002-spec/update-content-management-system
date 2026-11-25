@@ -8,7 +8,7 @@ Signal CMS is an existing React and Express content-management application with 
 - Reader accounts, bookmarks, reading history and progress, comments, notifications, and recommendation feedback
 - Author drafts, mandatory administrator review before publishing, reviewer feedback and resubmission, freshness checks, and engagement analytics
 - Optional multiple-choice quizzes embedded in articles, with reader scoring
-- Admin moderation queue, reports and appeals, user roles and restrictions, taxonomy, audit events, and settings
+- Admin moderation queue, comment review (approve, reject, remove), reports and appeals, user roles and restrictions, taxonomy, audit events, and settings
 - JWT authentication, role-based authorization, rate limiting, and MongoDB persistence when configured
 - Optional Google and GitHub OAuth with one-time state, PKCE, and verified-email checks
 - Role-specific author, reader, and administrator analytics backed by recorded application data
@@ -32,6 +32,7 @@ if (-not (Test-Path .\frontend\.env)) { Copy-Item .\frontend\.env.example .\fron
 ```
 
 The guarded copy commands only create missing `.env` files; they do not overwrite existing environment settings or credentials. Set a unique `JWT_SECRET` and `MONGODB_URI` in `backend/.env` if MongoDB persistence is desired. Set `VITE_API_BASE_URL` in `frontend/.env` if the API is not at `http://localhost:5000/api`.
+To allow Admin signup, configure `ADMIN_SIGNUP_INVITE_CODE` in `backend/.env` with a private random value of at least 32 characters. Leave it empty to keep Admin signup disabled. Share the code only with people who should have full administrator access; never commit it.
 
 ## Run a presentation demo on another laptop
 
@@ -88,7 +89,10 @@ Backend (`backend/.env`):
 | --- | --- |
 | `PORT` | API port (default `5000`) |
 | `JWT_SECRET` | Signing key for authentication tokens |
+| `ADMIN_SIGNUP_INVITE_CODE` | Optional private code (at least 32 characters) required for Admin signup; unset disables Admin signup |
 | `MONGODB_URI` | Optional MongoDB connection string |
+| `SEED_DEMO_DATA` | Seed demo users/articles into an empty MongoDB database. Defaults to `true` outside production and `false` in production, so the demo Admin password is never created in a production database |
+| `TRUST_PROXY` | Number of reverse-proxy hops in front of the API (for example `1`). Set it in production behind a proxy so rate limits use each visitor's real IP |
 | `CORS_ORIGIN` | Comma-separated allowed frontend origins |
 | `AI_PROVIDER` | AI provider: `local` (default) or `gemini` |
 | `GEMINI_API_KEY` | Gemini API key; required when `AI_PROVIDER=gemini` |
@@ -137,7 +141,7 @@ All endpoints are under `/api`.
 - Reader account: profile, bookmarks, history/progress, reading insights, notifications, comments, reports, and appeals
 - Author analytics and freshness: `GET /me/analytics`, `GET /me/freshness`, `POST /freshness/check`
 - AI tools: `POST /ai/tools/:tool` (for example `summary`, `writing`, `moderation`, `quality`, or `related`; uses the configured provider)
-- Admin: moderation dashboard and queue, article decisions, reports, appeals, users, audit log, taxonomy, and settings
+- Admin: moderation dashboard and queue, article decisions, comment review (`GET /moderation/comments`, `PATCH /moderation/comments/:id` with `approve`, `reject` or `remove`), reports, appeals, users, audit log, taxonomy, and settings
 
 Author submissions are never published by automated moderation. They remain pending (or quarantined for higher-risk review) until an administrator approves them. Administrators can approve, reject, request changes, or quarantine a submission; authors can see reviewer feedback and resubmit rejected or returned work. Since quizzes are embedded in articles, they are approved as part of the article and are not available until the article is published.
 
@@ -146,8 +150,19 @@ Author submissions are never published by automated moderation. They remain pend
 ```powershell
 npm run build --workspace frontend
 npm run lint --workspace frontend
-node --test backend/test/*.test.js
+npm test
 ```
+
+`npm test` runs `node --test` over `backend/test/*.test.js`.
+
+## Security notes
+
+- Login, signup, OAuth start, password-reset request and password-reset confirm each have their own rate limit; failed logins are limited to 20 per 15 minutes per IP.
+- Admins cannot publish their own articles, including through the article edit endpoint.
+- When `AI_PROVIDER=gemini`, readers can only use the local cached summary; other AI tools require an author or administrator account. AI requests are limited to 30 per minute per user.
+- Public endpoints return only public profile fields (name, bio, avatar, role) for authors and commenters, and hide reviewer notes, moderation details and quiz answers from public article data.
+- Article cover images must be `http(s)` URLs, categories must exist, and each tag is limited to 50 characters.
+- A reader's share of an article counts once, and a reputation event with the same reason can be recorded for a user once per day.
 
 ## Current limitations
 

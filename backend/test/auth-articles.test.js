@@ -11,6 +11,7 @@ const aiRoutes = require('../src/routes/ai');
 const { optionalAuth, signToken } = require('../src/middleware/auth');
 
 test('reader and author signup, login, and article permissions work end to end', async () => {
+  const originalAdminSignupCode = process.env.ADMIN_SIGNUP_INVITE_CODE;
   const originalUsers = store.users;
   const originalArticles = store.articles;
   const originalAuditLogs = store.auditLogs;
@@ -354,13 +355,29 @@ test('reader and author signup, login, and article permissions work end to end',
     assert.equal(resubmission.status, 200);
     assert.equal(resubmission.payload.article.status, 'pending');
 
-    const elevatedSignup = await request('/auth/signup', {
+    delete process.env.ADMIN_SIGNUP_INVITE_CODE;
+    const unconfiguredAdminSignup = await request('/auth/signup', {
       method: 'POST',
       body: { name: 'Not Admin', email: 'not-admin@example.com', password: 'ReaderPass123!', role: 'admin' },
     });
-    assert.equal(elevatedSignup.status, 400);
+    assert.equal(unconfiguredAdminSignup.status, 403);
+    const adminSignupCode = 'test-admin-invitation-code-1234567890';
+    process.env.ADMIN_SIGNUP_INVITE_CODE = adminSignupCode;
+    const invalidAdminSignup = await request('/auth/signup', {
+      method: 'POST',
+      body: { name: 'Not Admin', email: 'not-admin@example.com', password: 'ReaderPass123!', role: 'admin', adminInviteCode: `${adminSignupCode}wrong` },
+    });
+    assert.equal(invalidAdminSignup.status, 403);
+    const validAdminSignup = await request('/auth/signup', {
+      method: 'POST',
+      body: { name: 'Invited Admin', email: 'invited-admin@example.com', password: 'AdminPass123!', role: 'admin', adminInviteCode: adminSignupCode },
+    });
+    assert.equal(validAdminSignup.status, 201);
+    assert.equal(validAdminSignup.payload.user.role, 'admin');
   } finally {
     await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    if (originalAdminSignupCode === undefined) delete process.env.ADMIN_SIGNUP_INVITE_CODE;
+    else process.env.ADMIN_SIGNUP_INVITE_CODE = originalAdminSignupCode;
     store.users = originalUsers;
     store.articles = originalArticles;
     store.auditLogs = originalAuditLogs;

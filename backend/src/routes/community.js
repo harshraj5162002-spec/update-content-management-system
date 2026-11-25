@@ -10,18 +10,9 @@ const { moderateContent } = require('../services/aiService');
 const { checkExternalLink } = require('../services/safeLinkCheck');
 const { recordAudit } = require('../services/audit');
 const { recordAbuse } = require('../services/trust');
-const { serializePublicArticle } = require('../services/articleSerialization');
+const { serializePublicArticle, serializePublicAuthorStats, serializePublicUser } = require('../services/articleSerialization');
 
 const router = express.Router();
-
-function visibleUser(user) {
-  if (!user) return null;
-  const profile = { ...user };
-  for (const field of ['passwordHash', 'passwordResetTokenHash', 'passwordResetTokenExpiresAt', 'oauthProviders', 'email', 'reputation']) {
-    delete profile[field];
-  }
-  return profile;
-}
 
 function ownUser(user) {
   if (!user) return null;
@@ -91,7 +82,9 @@ router.get('/categories/:id', (req, res) => {
   if (!category) return res.status(404).json({ message: 'Category not found.' });
   res.json({
     ...category,
-    articles: store.articles.filter((article) => article.status === 'published' && article.categoryIds?.includes(category.id)),
+    articles: store.articles
+      .filter((article) => article.status === 'published' && article.categoryIds?.includes(category.id))
+      .map(serializePublicArticle),
   });
 });
 
@@ -181,8 +174,8 @@ router.get('/authors', (req, res) => {
   const authors = store.users
     .filter((user) => ['author', 'admin'].includes(user.role) && user.status === 'active')
     .map((user) => ({
-      ...visibleUser(user),
-      stats: getAuthorStats(store.articles, user.id),
+      ...serializePublicUser(user),
+      stats: serializePublicAuthorStats(getAuthorStats(store.articles, user.id)),
     }));
   res.json(authors);
 });
@@ -191,8 +184,8 @@ router.get('/authors/:id', (req, res) => {
   const author = store.users.find((user) => user.id === req.params.id && ['author', 'admin'].includes(user.role));
   if (!author) return res.status(404).json({ message: 'Author not found.' });
   res.json({
-    author: visibleUser(author),
-    stats: getAuthorStats(store.articles, author.id),
+    author: serializePublicUser(author),
+    stats: serializePublicAuthorStats(getAuthorStats(store.articles, author.id)),
     articles: store.articles.filter((article) => article.authorId === author.id && article.status === 'published').map(serializePublicArticle),
   });
 });
@@ -225,7 +218,7 @@ router.put('/me/profile', requireAuth, [
   }
   if (req.body.name) req.user.avatar = req.body.name.trim().slice(0, 2).toUpperCase();
   await saveRecord('users', req.user);
-  res.json({ user: visibleUser(req.user) });
+  res.json({ user: ownUser(req.user) });
 }));
 
 router.get('/me/bookmarks', requireAuth, (req, res) => {
@@ -373,7 +366,9 @@ router.post('/articles/:id/comments', requireAuth, [
   await saveRecord('comments', comment);
   await saveRecord('articles', article);
   if (comment.status !== 'published') {
-    await addNotification(article.authorId, 'moderation', 'A comment is waiting for review.');
+    for (const admin of store.users.filter((user) => user.role === 'admin' && user.status === 'active')) {
+      await addNotification(admin.id, 'moderation', `A comment on “${article.title}” is waiting for review.`);
+    }
   } else {
     const event = {
       id: `event-${crypto.randomUUID()}`,
@@ -393,7 +388,7 @@ router.get('/articles/:id/comments', (req, res) => {
   if (!article) return res.status(404).json({ message: 'Article not found.' });
   const comments = store.comments
     .filter((item) => item.articleId === article.id && item.status === 'published')
-    .map((item) => ({ ...item, author: visibleUser(store.users.find((user) => user.id === item.authorId)) }));
+    .map((item) => ({ ...item, author: serializePublicUser(store.users.find((user) => user.id === item.authorId)) }));
   res.json({ items: comments });
 });
 

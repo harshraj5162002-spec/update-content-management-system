@@ -336,6 +336,73 @@ router.patch('/appeals/:id', [
   res.json({ appeal, article });
 }));
 
+router.get('/comments', (req, res) => {
+  const status = req.query.status ? String(req.query.status) : 'pending';
+  if (!['pending', 'published', 'rejected', 'removed'].includes(status)) {
+    return res.status(400).json({ message: 'Unsupported comment status.' });
+  }
+  const items = store.comments
+    .filter((comment) => comment.status === status)
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+    .map((comment) => ({
+      ...comment,
+      authorName: store.users.find((user) => user.id === comment.authorId)?.name || 'Unknown user',
+      articleTitle: store.articles.find((article) => article.id === comment.articleId)?.title || 'Article unavailable',
+    }));
+  res.json({ items, count: items.length });
+});
+
+router.patch('/comments/:id', [
+  body('decision').isIn(['approve', 'reject', 'remove']),
+  body('reason').optional().trim().isLength({ max: 1000 }),
+], asyncHandler(async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+  const comment = store.comments.find((item) => item.id === req.params.id);
+  if (!comment) return res.status(404).json({ message: 'Comment not found.' });
+
+  const { decision } = req.body;
+  if (decision === 'remove' ? comment.status !== 'published' : comment.status !== 'pending') {
+    return res.status(409).json({
+      message: decision === 'remove'
+        ? 'Only published comments can be removed.'
+        : 'Only comments awaiting review can be approved or rejected.',
+    });
+  }
+
+  const article = store.articles.find((item) => item.id === comment.articleId);
+  const reviewedAt = new Date().toISOString();
+  comment.status = { approve: 'published', reject: 'rejected', remove: 'removed' }[decision];
+  comment.reviewedBy = req.user.id;
+  comment.reviewedAt = reviewedAt;
+  comment.reviewReason = (req.body.reason || '').trim();
+
+  if (article) {
+    if (decision === 'approve') {
+      article.comments = (article.comments || 0) + 1;
+      const event = {
+        id: `event-${crypto.randomUUID()}`,
+        userId: comment.authorId,
+        articleId: article.id,
+        type: 'comment',
+        createdAt: reviewedAt,
+      };
+      store.engagementEvents.push(event);
+      await saveRecord('engagementEvents', event);
+      await saveRecord('articles', article);
+    } else if (decision === 'remove') {
+      article.comments = Math.max(0, (article.comments || 0) - 1);
+      await saveRecord('articles', article);
+    }
+  }
+  await saveRecord('comments', comment);
+
+  const verb = { approve: 'approved', reject: 'not approved', remove: 'removed by a moderator' }[decision];
+  await addNotification(comment.authorId, 'moderation', `Your comment on “${article?.title || 'an article'}” was ${verb}.`);
+  await recordAudit({ actorId: req.user.id, action: `comment.review.${decision}`, targetType: 'comment', targetId: comment.id, reason: comment.reviewReason, outcome: comment.status });
+  res.json({ comment });
+}));
+
 router.get('/audit', (req, res) => {
   const page = Math.max(1, Math.floor(Number(req.query.page) || 1));
   const limit = Math.min(100, Math.max(1, Math.floor(Number(req.query.limit) || 25)));

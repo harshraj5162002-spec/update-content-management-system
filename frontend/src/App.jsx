@@ -589,7 +589,7 @@ function ArticlePage({ token }) {
           <div className="reading-progress">
             <span style={{ width: `${readProgress}%` }} />
           </div>
-          <p>{article.content}</p>
+          <p className="article-content-text">{article.content}</p>
           {article.quiz?.questions?.length > 0 && (
             <section className="article-quiz section-card">
               <h2>Quick knowledge check</h2>
@@ -668,7 +668,7 @@ function ArticlePage({ token }) {
           <div className="stat-card">
             <Sparkles size={18} />
             <div>
-              <strong>{article.moderation?.riskScore || 12}</strong>
+              <strong>{article.moderation?.riskScore ?? '—'}</strong>
               <span>risk score</span>
             </div>
           </div>
@@ -750,7 +750,16 @@ function AuthPage({ onLogin }) {
     try {
       const payload = mode === 'login'
         ? await apiRequest('/auth/login', { method: 'POST', body: JSON.stringify({ email: form.email, password: form.password, role: form.role }) })
-        : await apiRequest('/auth/signup', { method: 'POST', body: JSON.stringify({ name: form.name, email: form.email, password: form.password, role: form.role }) });
+        : await apiRequest('/auth/signup', {
+          method: 'POST',
+          body: JSON.stringify({
+            name: form.name,
+            email: form.email,
+            password: form.password,
+            role: form.role,
+            ...(form.role === 'admin' ? { adminInviteCode: form.adminInviteCode } : {}),
+          }),
+        });
 
       onLogin(payload.token);
       navigate(payload.user?.role === 'reader' ? '/for-you' : payload.user?.role === 'admin' ? '/admin' : '/author');
@@ -782,7 +791,7 @@ function AuthPage({ onLogin }) {
           }}>Login</button>
           <button type="button" className={mode === 'signup' ? 'active' : ''} onClick={() => {
             setMode('signup');
-            setForm((current) => ({ ...current, email: '', password: '', role: current.role === 'admin' ? 'reader' : current.role }));
+            setForm((current) => ({ ...current, email: '', password: '', adminInviteCode: '', role: current.role === 'admin' ? 'reader' : current.role }));
             setError('');
           }}>Signup</button>
         </div>
@@ -802,15 +811,33 @@ function AuthPage({ onLogin }) {
               setForm((current) => ({
                 ...current,
                 role,
-                ...(role === 'admin' && DEMO_ADMIN_EMAIL ? { email: DEMO_ADMIN_EMAIL } : {}),
+                ...(mode === 'login' && role === 'admin' && DEMO_ADMIN_EMAIL ? { email: DEMO_ADMIN_EMAIL } : {}),
+                ...(role !== 'admin' ? { adminInviteCode: '' } : {}),
               }));
             }}>
               <option value="reader">Reader</option>
               <option value="author">Author</option>
-              {mode === 'login' && <option value="admin">Admin</option>}
+              <option value="admin">Admin</option>
             </select>
             {mode === 'login' && <small className="muted-copy">Your selection is checked against your account; it does not change your permissions.</small>}
           </label>
+
+          {mode === 'signup' && form.role === 'admin' && (
+            <label>
+              Admin invitation code
+              <input
+                name="adminInviteCode"
+                type="password"
+                value={form.adminInviteCode || ''}
+                onChange={(event) => setForm({ ...form, adminInviteCode: event.target.value })}
+                required
+                minLength={32}
+                maxLength={256}
+                autoComplete="off"
+              />
+              <small className="muted-copy">Admin signup is available only with a code configured by the site owner.</small>
+            </label>
+          )}
 
           <label>
             Email
@@ -844,7 +871,7 @@ function AuthPage({ onLogin }) {
           {mode === 'login' && <Link className="text-link" to="/forgot-password">Forgot password?</Link>}
         </form>
 
-        {(oauthProviders.google || oauthProviders.github) && <>
+        {(mode !== 'signup' || form.role !== 'admin') && (oauthProviders.google || oauthProviders.github) && <>
           <div className="auth-divider"><span>or continue with</span></div>
           <div className="oauth-buttons">
             {oauthProviders.google && <button type="button" className="secondary-button" onClick={() => startOAuth('google')}>Continue with Google</button>}
@@ -1739,23 +1766,41 @@ function ReviewQueuePage() {
 function AdminReportsPage() {
   const [reports, setReports] = useState([]);
   const [appeals, setAppeals] = useState([]);
+  const [pendingComments, setPendingComments] = useState([]);
   const [tab, setTab] = useState('reports');
   const [error, setError] = useState('');
   const load = useCallback(async () => {
     try {
-      const [reportData, appealData] = await Promise.all([apiRequest('/moderation/reports'), apiRequest('/moderation/appeals')]);
+      const [reportData, appealData, commentData] = await Promise.all([
+        apiRequest('/moderation/reports'),
+        apiRequest('/moderation/appeals'),
+        apiRequest('/moderation/comments?status=pending'),
+      ]);
       setReports(reportData.items || []);
       setAppeals(appealData.items || []);
+      setPendingComments(commentData.items || []);
     } catch (loadError) { setError(loadError.message); }
   }, []);
   useEffect(() => {
-    Promise.all([apiRequest('/moderation/reports'), apiRequest('/moderation/appeals')])
-      .then(([reportData, appealData]) => {
+    Promise.all([
+      apiRequest('/moderation/reports'),
+      apiRequest('/moderation/appeals'),
+      apiRequest('/moderation/comments?status=pending'),
+    ])
+      .then(([reportData, appealData, commentData]) => {
         setReports(reportData.items || []);
         setAppeals(appealData.items || []);
+        setPendingComments(commentData.items || []);
       })
       .catch((loadError) => setError(loadError.message));
   }, []);
+  async function reviewComment(commentId, decision) {
+    try {
+      setError('');
+      await apiRequest(`/moderation/comments/${commentId}`, { method: 'PATCH', body: JSON.stringify({ decision, reason: 'Reviewed by an administrator.' }) });
+      await load();
+    } catch (reviewError) { setError(reviewError.message); }
+  }
   async function review(kind, item, decision) {
     try {
       const endpoint = kind === 'appeal' ? `/moderation/appeals/${item.id}` : `/moderation/reports/${item.id}`;
@@ -1765,9 +1810,10 @@ function AdminReportsPage() {
     } catch (reviewError) { setError(reviewError.message); }
   }
   return <main className="page-content"><PageHeading eyebrow="Trust & safety" title="Reports and appeals" description="Review community reports and moderation appeals." />
-    <div className="auth-toggle"><button className={tab === 'reports' ? 'active' : ''} onClick={() => setTab('reports')}>Reports ({reports.length})</button><button className={tab === 'appeals' ? 'active' : ''} onClick={() => setTab('appeals')}>Appeals ({appeals.length})</button></div>
+    <div className="auth-toggle"><button className={tab === 'reports' ? 'active' : ''} onClick={() => setTab('reports')}>Reports ({reports.length})</button><button className={tab === 'appeals' ? 'active' : ''} onClick={() => setTab('appeals')}>Appeals ({appeals.length})</button><button className={tab === 'comments' ? 'active' : ''} onClick={() => setTab('comments')}>Comments ({pendingComments.length})</button></div>
     {error && <div className="page-panel error-panel">{error}</div>}
-    <div className="notification-list">{(tab === 'reports' ? reports : appeals).map((item) => <article className="notification-item" key={item.id}><ShieldCheck size={18} /><div><strong>{item.reason}</strong><small>{item.targetType ? `${item.targetType} ${item.targetId}` : `Article ${item.articleId}`} · {item.status}</small><small>{item.details || item.decision}</small></div>{item.status === 'open' && <div className="button-row">{tab === 'reports' ? <><button className="secondary-button" onClick={() => review('report', item, 'resolved')}>Resolve</button><button className="secondary-button" onClick={() => review('report', item, 'dismissed')}>Dismiss</button></> : <><button className="primary-button" onClick={() => review('appeal', item, 'approve')}>Approve appeal</button><button className="secondary-button" onClick={() => review('appeal', item, 'uphold')}>Uphold</button></>}</div>}</article>)}</div>
+    {tab === 'comments' && (pendingComments.length ? <div className="notification-list">{pendingComments.map((comment) => <article className="notification-item" key={comment.id}><ShieldCheck size={18} /><div><strong>{comment.authorName} on “{comment.articleTitle}”</strong><small>{comment.body}</small><small>Flagged: {comment.moderation?.reasons?.join(', ') || 'Needs review'}</small></div><div className="button-row"><button className="primary-button" onClick={() => reviewComment(comment.id, 'approve')}>Approve</button><button className="secondary-button" onClick={() => reviewComment(comment.id, 'reject')}>Reject</button></div></article>)}</div> : <div className="empty-state">No comments are waiting for review.</div>)}
+    {tab !== 'comments' && <div className="notification-list">{(tab === 'reports' ? reports : appeals).map((item) => <article className="notification-item" key={item.id}><ShieldCheck size={18} /><div><strong>{item.reason}</strong><small>{item.targetType ? `${item.targetType} ${item.targetId}` : `Article ${item.articleId}`} · {item.status}</small><small>{item.details || item.decision}</small></div>{item.status === 'open' && <div className="button-row">{tab === 'reports' ? <><button className="secondary-button" onClick={() => review('report', item, 'resolved')}>Resolve</button><button className="secondary-button" onClick={() => review('report', item, 'dismissed')}>Dismiss</button>{item.targetType === 'comment' && <button className="secondary-button" onClick={() => reviewComment(item.targetId, 'remove')}>Remove comment</button>}</> : <><button className="primary-button" onClick={() => review('appeal', item, 'approve')}>Approve appeal</button><button className="secondary-button" onClick={() => review('appeal', item, 'uphold')}>Uphold</button></>}</div>}</article>)}</div>}
   </main>;
 }
 
@@ -1836,7 +1882,7 @@ function AdminUsersPage() {
 
   return <main className="page-content"><PageHeading eyebrow="Administration" title="User management" description="Manage roles, short-term restrictions, and audited reputation events." />
     {error && <div className="page-panel error-panel">{error}</div>}{message && <p className="success-message">{message}</p>}
-    <section className="section-card editor-form"><h2>Reputation adjustment</h2><label>Score change<select value={adjustment.delta} onChange={(event) => setAdjustment({ ...adjustment, delta: event.target.value })}><option value="1">+1</option><option value="3">+3</option><option value="-1">−1</option><option value="-3">−3</option></select></label><label>Reason<input value={adjustment.reason} maxLength={500} onChange={(event) => setAdjustment({ ...adjustment, reason: event.target.value })} /></label><p className="muted-copy">Select a user below and click “Record event”; duplicate admin events with the same reason are rejected.</p></section>
+    <section className="section-card editor-form"><h2>Reputation adjustment</h2><label>Score change<select value={adjustment.delta} onChange={(event) => setAdjustment({ ...adjustment, delta: event.target.value })}><option value="1">+1</option><option value="3">+3</option><option value="-1">−1</option><option value="-3">−3</option></select></label><label>Reason<input value={adjustment.reason} maxLength={500} onChange={(event) => setAdjustment({ ...adjustment, reason: event.target.value })} /></label><p className="muted-copy">Select a user below and click “Record event”; the same reason cannot be recorded twice for a user on the same day.</p></section>
     <div className="table-wrap section-card"><table><thead><tr><th>User</th><th>Email</th><th>Role</th><th>Status</th><th>Reputation</th><th>Actions</th></tr></thead><tbody>{users.map((user) => <tr key={user.id}><td>{user.name}</td><td>{user.email}</td><td><select aria-label={`Role for ${user.name}`} value={user.role} disabled={user.isCurrentUser} onChange={(event) => updateRole(user.id, event.target.value)}><option value="reader">Reader</option><option value="author">Author</option><option value="admin">Admin</option></select></td><td>{user.status}{user.restrictedUntil && <small> until {new Date(user.restrictedUntil).toLocaleString()}</small>}</td><td>{user.reputation ?? '—'}</td><td><div className="button-row">{user.status === 'restricted' ? <button className="secondary-button" onClick={() => clearRestriction(user)}>Lift restriction</button> : user.role !== 'admin' && <button className="secondary-button" onClick={() => setRestriction(user)}>Restrict 24h</button>}<button className="secondary-button" onClick={() => giveReputation(user.id)}>Record event</button></div></td></tr>)}</tbody></table></div>
   </main>;
 }
@@ -1925,7 +1971,7 @@ function AdminSettingsPage() {
     } catch (saveError) { setError(saveError.message); }
   }
   return <main className="page-content"><PageHeading eyebrow="Administration" title="System settings" description="Configure deterministic moderation thresholds for new article submissions." />
-    <form className="section-card editor-form" onSubmit={save}><label>Maximum risk score for low-risk classification<input type="number" min="0" max="98" value={thresholds.autoApprove} onChange={(event) => setThresholds({ ...thresholds, autoApprove: event.target.value })} /></label><label>Maximum risk score before quarantine<input type="number" min="1" max="100" value={thresholds.review} onChange={(event) => setThresholds({ ...thresholds, review: event.target.value })} /></label><p className="muted-copy">These thresholds classify moderation risk only; every submission still requires administrator approval before publication. Scores above the review threshold are quarantined for closer review.</p>{error && <div className="error-panel inline-error">{error}</div>}{message && <p className="success-message">{message}</p>}<button className="primary-button" type="submit">Save settings</button></form>
+    <form className="section-card editor-form" onSubmit={save}><label>Maximum risk score for low-risk classification<input type="number" min="0" max="99" value={thresholds.autoApprove} onChange={(event) => setThresholds({ ...thresholds, autoApprove: event.target.value })} /></label><label>Maximum risk score before quarantine<input type="number" min="1" max="100" value={thresholds.review} onChange={(event) => setThresholds({ ...thresholds, review: event.target.value })} /></label><p className="muted-copy">These thresholds classify moderation risk only; every submission still requires administrator approval before publication. Scores above the review threshold are quarantined for closer review.</p>{error && <div className="error-panel inline-error">{error}</div>}{message && <p className="success-message">{message}</p>}<button className="primary-button" type="submit">Save settings</button></form>
   </main>;
 }
 

@@ -1,5 +1,9 @@
 const models = require('../models');
 const { store } = require('./store');
+const { seedDemoData } = require('../config/env');
+
+// Collections that contain demo accounts and sample content (including known demo passwords).
+const demoOnlyCollections = new Set(['users', 'articles', 'comments', 'notifications']);
 
 const collectionModels = {
   users: models.User,
@@ -38,6 +42,11 @@ async function hydrateStore(store) {
     const documents = await Model.find().lean();
     if (documents.length) {
       store[collection] = documents.map(toRecord);
+      continue;
+    }
+
+    if (!seedDemoData && demoOnlyCollections.has(collection)) {
+      store[collection] = [];
       continue;
     }
 
@@ -126,6 +135,15 @@ async function deleteRecord(collection, id) {
   await Model.findByIdAndDelete(id);
 }
 
+async function deleteByArticleId(collection, articleId) {
+  if (!databaseEnabled) return;
+
+  const Model = collectionModels[collection];
+  if (!Model) throw new Error(`Unknown persistence collection: ${collection}`);
+
+  await Model.deleteMany({ articleId });
+}
+
 async function saveSettings(settings) {
   if (!databaseEnabled) return;
   await models.SystemSettings.findByIdAndUpdate(
@@ -135,4 +153,4 @@ async function saveSettings(settings) {
   );
 }
 
-module.exports = { hydrateStore, saveRecord, consumePasswordResetToken, clearPasswordResetToken, deleteRecord, saveSettings };
+module.exports = { hydrateStore, saveRecord, consumePasswordResetToken, clearPasswordResetToken, deleteRecord, deleteByArticleId, saveSettings };

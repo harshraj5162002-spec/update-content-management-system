@@ -2,7 +2,7 @@ const crypto = require('node:crypto');
 const express = require('express');
 const { body, validationResult } = require('express-validator');
 const { store } = require('../data/store');
-const { saveRecord, deleteRecord } = require('../data/persistence');
+const { saveRecord, deleteRecord, deleteByArticleId } = require('../data/persistence');
 const { requireAuth, authorize } = require('../middleware/auth');
 const { moderateContent, suggestImprovements } = require('../services/aiService');
 const { getArticleSummary } = require('../services/articleInsights');
@@ -19,25 +19,26 @@ const { recordAudit } = require('../services/audit');
 const { asyncHandler } = require('../middleware/asyncHandler');
 const { recordAbuse } = require('../services/trust');
 const { isValidQuiz, normalizeQuiz } = require('../services/quiz');
-const { serializePublicArticle } = require('../services/articleSerialization');
+const { serializePublicArticle, serializePublicUser } = require('../services/articleSerialization');
 
 const router = express.Router();
+function existingCategories(ids) {
+  return ids.every((id) => typeof id === 'string' && store.categories.some((category) => category.id === id));
+}
+
 const articleStatuses = new Set(['draft', 'pending', 'published', 'quarantined', 'archived', 'rejected', 'changes_requested']);
 
 function canViewPrivateArticle(user, article) {
   return Boolean(user && (user.role === 'admin' || user.id === article.authorId));
 }
 
-function publicAuthor(user) {
-  if (!user) return null;
-  const {
-    passwordHash,
-    passwordResetTokenHash,
-    passwordResetTokenExpiresAt,
-    oauthProviders,
-    ...safeUser
-  } = user;
-  return safeUser;
+const articleDependentCollections = ['comments', 'bookmarks', 'readingHistory', 'freshnessAlerts', 'engagementEvents'];
+
+async function removeArticleDependents(articleId) {
+  for (const collection of articleDependentCollections) {
+    store[collection] = store[collection].filter((item) => item.articleId !== articleId);
+    await deleteByArticleId(collection, articleId);
+  }
 }
 
 function getVisibleArticles(user) {
@@ -161,7 +162,7 @@ router.get('/:id', (req, res) => {
     }
   }
 
-  const author = publicAuthor(store.users.find((user) => user.id === article.authorId));
+  const author = serializePublicUser(store.users.find((user) => user.id === article.authorId));
   const recommendations = getRelatedArticles(article, store.articles);
   res.json({
     ...(canViewPrivateArticle(req.user, article) ? article : serializePublicArticle(article)),
@@ -207,7 +208,9 @@ router.post(
     body('content').trim().isLength({ min: 30, max: 100000 }).withMessage('Content should be between 30 and 100000 characters.'),
     body('summary').optional().isString().isLength({ max: 500 }),
     body('tags').optional().isArray({ max: 20 }),
-    body('categoryIds').optional().isArray({ max: 10 }),
+    body('tags.*').optional().isString().isLength({ max: 50 }).withMessage('Each tag can contain at most 50 characters.'),
+    body('categoryIds').optional().isArray({ max: 10 }).custom(existingCategories).withMessage('Choose existing categories.'),
+    body('coverImage').optional({ checkFalsy: true }).isURL({ protocols: ['http', 'https'], require_protocol: true }).withMessage('Cover image must be a valid http(s) URL.'),
     body('quiz').optional({ nullable: true }).custom(isValidQuiz).withMessage('Quiz must contain 1-20 questions, each with 2-6 options and a valid correct answer.'),
   ],
   asyncHandler(async (req, res) => {
@@ -293,13 +296,18 @@ router.put('/:id', requireAuth, authorize('author', 'admin'), (req, res, next) =
   if (req.body.status && req.user.role !== 'admin') {
     return res.status(403).json({ message: 'Use the submit action to change article workflow status.' });
   }
+  if (req.body.status === 'published' && article.authorId === req.user.id) {
+    return res.status(403).json({ message: 'You cannot publish your own article. Another administrator must approve it.' });
+  }
   return next();
 }, [
   body('title').optional().trim().isLength({ min: 4, max: 180 }),
   body('content').optional().trim().isLength({ min: 30, max: 100000 }),
   body('summary').optional().isString().isLength({ max: 500 }),
   body('tags').optional().isArray({ max: 20 }),
-  body('categoryIds').optional().isArray({ max: 10 }),
+  body('tags.*').optional().isString().isLength({ max: 50 }).withMessage('Each tag can contain at most 50 characters.'),
+  body('categoryIds').optional().isArray({ max: 10 }).custom(existingCategories).withMessage('Choose existing categories.'),
+  body('coverImage').optional({ checkFalsy: true }).isURL({ protocols: ['http', 'https'], require_protocol: true }).withMessage('Cover image must be a valid http(s) URL.'),
   body('quiz').optional({ nullable: true }).custom(isValidQuiz).withMessage('Quiz must contain 1-20 questions, each with 2-6 options and a valid correct answer.'),
 ], asyncHandler(async (req, res) => {
   const errors = validationResult(req);
@@ -314,6 +322,7 @@ router.put('/:id', requireAuth, authorize('author', 'admin'), (req, res, next) =
   if (req.body.coverImage !== undefined) article.coverImage = req.body.coverImage;
   if (req.body.quiz !== undefined) article.quiz = normalizeQuiz(req.body.quiz);
   if (req.body.status && req.user.role === 'admin' && articleStatuses.has(req.body.status)) article.status = req.body.status;
+  if (article.status === 'published' && !article.publishedAt) article.publishedAt = new Date().toISOString();
   if (req.user.role !== 'admin' && article.status === 'published') {
     article.status = 'pending';
     article.review = { ...(article.review || {}), submittedAt: new Date().toISOString() };
@@ -333,6 +342,7 @@ router.delete('/:id', requireAuth, authorize('author', 'admin'), asyncHandler(as
 
   await deleteRecord('articles', article.id);
   store.articles = store.articles.filter((item) => item.id !== article.id);
+  await removeArticleDependents(article.id);
   await recordAudit({ actorId: req.user.id, action: 'article.delete', targetType: 'article', targetId: article.id, outcome: 'deleted' });
   res.json({ message: 'Article removed.' });
 }));
@@ -346,6 +356,11 @@ router.post('/:id/engagement', requireAuth, asyncHandler(async (req, res) => {
   const duplicate = store.engagementEvents.find((event) =>
     event.userId === req.user.id && event.articleId === article.id && event.type === type
   );
+
+  if (type === 'share' && duplicate) {
+    // A user's share counts once per article so the counter cannot be inflated by repeated clicks.
+    return res.json({ active: true, article });
+  }
 
   if (type === 'like' || type === 'bookmark') {
     if (duplicate) {

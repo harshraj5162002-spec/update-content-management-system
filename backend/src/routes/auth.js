@@ -14,13 +14,23 @@ const { frontendUrl, nodeEnv } = require('../config/env');
 
 const router = express.Router();
 const pendingAccountEmails = new Set();
-const resetRateLimit = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 5,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { message: 'Too many password reset attempts. Please try again later.' },
-});
+function createLimiter(max, message, extra = {}) {
+  return rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { message },
+    ...extra,
+  });
+}
+
+// Each limiter has its own counter so one flow cannot exhaust another's allowance.
+const loginRateLimit = createLimiter(20, 'Too many failed login attempts. Please try again later.', { skipSuccessfulRequests: true });
+const signupRateLimit = createLimiter(20, 'Too many signup attempts. Please try again later.');
+const oauthStartRateLimit = createLimiter(30, 'Too many sign-in attempts. Please try again later.');
+const resetRequestRateLimit = createLimiter(5, 'Too many password reset attempts. Please try again later.');
+const resetConfirmRateLimit = createLimiter(10, 'Too many password reset attempts. Please try again later.');
 
 function publicUser(user) {
   const safeUser = { ...user };
@@ -33,6 +43,21 @@ function publicUser(user) {
 function readCookie(req, name) {
   const entry = (req.headers.cookie || '').split(';').map((cookie) => cookie.trim()).find((cookie) => cookie.startsWith(`${name}=`));
   return entry ? entry.slice(name.length + 1) : '';
+}
+
+function hasValidAdminSignupCode(code) {
+  const configuredCode = process.env.ADMIN_SIGNUP_INVITE_CODE;
+  if (
+    typeof code !== 'string' ||
+    typeof configuredCode !== 'string' ||
+    Buffer.byteLength(configuredCode, 'utf8') < 32
+  ) {
+    return false;
+  }
+
+  const submittedHash = crypto.createHash('sha256').update(code).digest();
+  const configuredHash = crypto.createHash('sha256').update(configuredCode).digest();
+  return crypto.timingSafeEqual(submittedHash, configuredHash);
 }
 
 async function createUserForEmail(email, createUser) {
@@ -58,11 +83,13 @@ async function createUserForEmail(email, createUser) {
 
 router.post(
   '/signup',
+  signupRateLimit,
   [
     body('name').trim().isLength({ min: 2 }).withMessage('Name must contain at least 2 characters.'),
     body('email').trim().isEmail().withMessage('A valid email is required.'),
     body('password').isLength({ min: 8 }).withMessage('Password must be at least 8 characters.'),
-    body('role').optional().isIn(['reader', 'author']).withMessage('Role must be reader or author.'),
+    body('role').optional().isIn(['reader', 'author', 'admin']).withMessage('Role must be reader, author, or admin.'),
+    body('adminInviteCode').optional().isString().isLength({ min: 32, max: 256 }).withMessage('Admin invitation code must be between 32 and 256 characters.'),
   ],
   asyncHandler(async (req, res) => {
     const errors = validationResult(req);
@@ -72,6 +99,9 @@ router.post(
 
     const { name, password } = req.body;
     const role = req.body.role || 'reader';
+    if (role === 'admin' && !hasValidAdminSignupCode(req.body.adminInviteCode)) {
+      return res.status(403).json({ message: 'Admin signup requires a valid invitation code.' });
+    }
     const email = req.body.email.trim().toLowerCase();
     const user = await createUserForEmail(email, async () => ({
       id: `u-${crypto.randomUUID()}`,
@@ -96,6 +126,7 @@ router.post(
 
 router.post(
   '/login',
+  loginRateLimit,
   [
     body('email').trim().isEmail().withMessage('A valid email is required.'),
     body('password').notEmpty().withMessage('Password is required.'),
@@ -143,7 +174,7 @@ router.get('/oauth/providers', (req, res) => {
   res.json({ google: isOAuthConfigured('google'), github: isOAuthConfigured('github') });
 });
 
-router.get('/oauth/:provider', resetRateLimit, asyncHandler(async (req, res) => {
+router.get('/oauth/:provider', oauthStartRateLimit, asyncHandler(async (req, res) => {
   const { provider } = req.params;
   if (!['google', 'github'].includes(provider)) return res.status(404).json({ message: 'OAuth provider not supported.' });
   if (!isOAuthConfigured(provider)) return res.status(503).json({ message: `${provider} sign-in is not configured.` });
@@ -243,7 +274,7 @@ router.get('/oauth/:provider/callback', asyncHandler(async (req, res) => {
   }
 }));
 
-router.post('/password-reset/request', resetRateLimit, [
+router.post('/password-reset/request', resetRequestRateLimit, [
   body('email').trim().isEmail().withMessage('A valid email is required.'),
 ], asyncHandler(async (req, res) => {
   const errors = validationResult(req);
@@ -275,7 +306,7 @@ router.post('/password-reset/request', resetRateLimit, [
   res.json({ message: 'If an account exists for that email, password reset instructions have been sent.' });
 }));
 
-router.post('/password-reset/confirm', resetRateLimit, [
+router.post('/password-reset/confirm', resetConfirmRateLimit, [
   body('token').isString().isLength({ min: 64, max: 64 }).withMessage('The reset link is invalid or expired.'),
   body('password').isLength({ min: 8 }).withMessage('Password must be at least 8 characters.'),
 ], asyncHandler(async (req, res) => {

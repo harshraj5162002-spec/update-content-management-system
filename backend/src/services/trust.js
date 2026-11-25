@@ -17,7 +17,9 @@ async function recordAbuse({ userId, type, details, severity = 'low' }) {
 }
 
 async function adjustReputation({ user, actorId, reason, delta }) {
-  const eventKey = `${user.id}:${actorId}:${reason.trim().toLowerCase()}`;
+  // Scoped to one calendar day (UTC): double-clicks are rejected, but the same reason can be recorded again on a later day.
+  const day = new Date().toISOString().slice(0, 10);
+  const eventKey = `${user.id}:${actorId}:${reason.trim().toLowerCase()}:${day}`;
   const existing = store.reputationEvents.find((event) => event.eventKey === eventKey);
   if (existing) return { event: existing, user, duplicate: true };
 

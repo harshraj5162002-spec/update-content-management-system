@@ -1,4 +1,5 @@
 const express = require('express');
+const rateLimit = require('express-rate-limit');
 const { requireAuth } = require('../middleware/auth');
 const { store } = require('../data/store');
 const { aiProvider, geminiModel } = require('../config/env');
@@ -9,6 +10,16 @@ const { asyncHandler } = require('../middleware/asyncHandler');
 const { serializePublicArticle } = require('../services/articleSerialization');
 
 const router = express.Router();
+
+// Per-user limit so a single account cannot exhaust the AI provider's quota.
+const aiRateLimit = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => req.user?.id || 'anonymous',
+  message: { message: 'Too many AI requests. Please wait a minute and try again.' },
+});
 const supportedTools = new Set(['summary', 'summarizer', 'writing', 'improve', 'moderation', 'quality', 'topics', 'tags', 'title', 'grammar', 'related']);
 
 function selectAssistantTool(message, role) {
@@ -53,7 +64,7 @@ function assistantReply(tool, result) {
   };
 }
 
-router.post('/assistant', requireAuth, asyncHandler(async (req, res) => {
+router.post('/assistant', requireAuth, aiRateLimit, asyncHandler(async (req, res) => {
   if (!['author', 'admin'].includes(req.user.role)) {
     return res.status(403).json({ message: 'The editorial copilot is available to authors and administrators.' });
   }
@@ -88,7 +99,7 @@ router.post('/assistant', requireAuth, asyncHandler(async (req, res) => {
   });
 }));
 
-router.post('/tools/:tool', requireAuth, asyncHandler(async (req, res) => {
+router.post('/tools/:tool', requireAuth, aiRateLimit, asyncHandler(async (req, res) => {
   const { tool } = req.params;
   if (!supportedTools.has(tool)) return res.status(404).json({ message: 'AI tool not found.' });
 
@@ -113,7 +124,8 @@ router.post('/tools/:tool', requireAuth, asyncHandler(async (req, res) => {
     return res.json({ result: getRelatedArticles(target, store.articles).map(serializePublicArticle), generatedBy: 'local relevance engine' });
   }
 
-  if (aiProvider === 'local' && ['summary', 'summarizer'].includes(tool) && req.body.articleId) {
+  const isReader = req.user.role === 'reader';
+  if ((aiProvider === 'local' || isReader) && ['summary', 'summarizer'].includes(tool) && req.body.articleId) {
     return res.json({
       result: getArticleSummary(article, Boolean(req.body.regenerate)),
       provider: 'local',
@@ -123,6 +135,9 @@ router.post('/tools/:tool', requireAuth, asyncHandler(async (req, res) => {
 
   let result;
   if (aiProvider === 'gemini') {
+    if (isReader) {
+      return res.status(403).json({ message: 'This AI tool is available to authors and administrators.' });
+    }
     try {
       result = await generateGeminiAITool(tool, article, store.articles);
     } catch (error) {

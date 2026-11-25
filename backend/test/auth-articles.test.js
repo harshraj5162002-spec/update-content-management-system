@@ -239,6 +239,26 @@ test('reader and author signup, login, and article permissions work end to end',
     const articleId = authorCreate.payload.article.id;
     assert.equal(authorCreate.payload.article.quiz.questions[0].correctOptionIndex, 1);
 
+    const auditCountBeforeAutosave = store.auditLogs.length;
+    const readerAutosave = await request(`/articles/${articleId}/autosave`, {
+      method: 'PUT',
+      token: readerLogin.payload.token,
+      body: { title: 'A Reader Cannot Autosave' },
+    });
+    assert.equal(readerAutosave.status, 403);
+    const authorAutosave = await request(`/articles/${articleId}/autosave`, {
+      method: 'PUT',
+      token: authorLogin.payload.token,
+      body: {
+        title: 'An Autosaved Editorial Test Story',
+        content: 'This autosaved article body is valid and long enough for server-side draft persistence.',
+      },
+    });
+    assert.equal(authorAutosave.status, 200);
+    assert.equal(authorAutosave.payload.article.status, 'draft');
+    assert.equal(authorAutosave.payload.article.title, 'An Autosaved Editorial Test Story');
+    assert.equal(store.auditLogs.length, auditCountBeforeAutosave);
+
     const authorEdit = await request(`/articles/${articleId}`, {
       method: 'PUT',
       token: authorLogin.payload.token,
@@ -252,6 +272,13 @@ test('reader and author signup, login, and article permissions work end to end',
     });
     assert.equal(authorSubmit.status, 200);
     assert.equal(authorSubmit.payload.article.status, 'pending');
+    const pendingAutosave = await request(`/articles/${articleId}/autosave`, {
+      method: 'PUT',
+      token: authorLogin.payload.token,
+      body: { title: 'Cannot Autosave A Pending Article' },
+    });
+    assert.equal(pendingAutosave.status, 409);
+    assert.equal(store.articles.find((article) => article.id === articleId).status, 'pending');
     const authorRecord = store.users.find((user) => user.id === authorSignup.payload.user.id);
     authorRecord.passwordResetTokenHash = 'pending-reset-hash';
     authorRecord.passwordResetTokenExpiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();

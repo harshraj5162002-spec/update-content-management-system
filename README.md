@@ -6,7 +6,7 @@ Signal CMS is an existing React and Express content-management application with 
 
 - Public discovery with full-text search, categories, tags, authors, trending stories, and related articles
 - Reader accounts, bookmarks, reading history and progress, comments, notifications, and recommendation feedback
-- Author drafts, mandatory administrator review before publishing, reviewer feedback and resubmission, freshness checks, and engagement analytics
+- Author drafts with cloud autosave for valid drafts and local recovery for incomplete work, mandatory administrator review before publishing, reviewer feedback and resubmission, freshness checks, and engagement analytics
 - Optional multiple-choice quizzes embedded in articles, with reader scoring
 - Admin moderation queue, comment review (approve, reject, remove), reports and appeals, user roles and restrictions, taxonomy, audit events, and settings
 - JWT authentication, role-based authorization, rate limiting, and MongoDB persistence when configured
@@ -136,7 +136,7 @@ All endpoints are under `/api`.
 
 - Health and dashboard: `GET /health`, `GET /dashboard`
 - Authentication: `POST /auth/signup`, `POST /auth/login`, `GET /auth/me`
-- Articles: `GET /articles`, `GET /articles/home`, `GET /articles/:id`, `POST /articles`, `PUT /articles/:id`, `POST /articles/:id/submit`, `POST /articles/:id/engagement`, `POST /articles/:id/quiz/attempt`
+- Articles: `GET /articles`, `GET /articles/home`, `GET /articles/:id`, `POST /articles`, `PUT /articles/:id`, `PUT /articles/:id/autosave`, `POST /articles/:id/submit`, `POST /articles/:id/engagement`, `POST /articles/:id/quiz/attempt`
 - Discovery: `GET /search`, `GET /trending`, `GET /recommendations`, `POST /recommendations/feedback`, plus categories, tags, and author profiles
 - Reader account: profile, bookmarks, history/progress, reading insights, notifications, comments, reports, and appeals
 - Author analytics and freshness: `GET /me/analytics`, `GET /me/freshness`, `POST /freshness/check`

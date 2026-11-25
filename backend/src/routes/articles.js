@@ -32,6 +32,21 @@ function canViewPrivateArticle(user, article) {
   return Boolean(user && (user.role === 'admin' || user.id === article.authorId));
 }
 
+function updateArticleFields(article, body) {
+  if (body.title !== undefined) article.title = body.title;
+  if (body.summary !== undefined) article.summary = body.summary;
+  if (body.content !== undefined) article.content = body.content;
+  if (body.categoryIds !== undefined) article.categoryIds = body.categoryIds;
+  if (body.tags !== undefined) article.tags = body.tags.map((tag) => String(tag).trim()).filter(Boolean);
+  if (body.coverImage !== undefined) article.coverImage = body.coverImage;
+  if (body.quiz !== undefined) article.quiz = normalizeQuiz(body.quiz);
+}
+
+function refreshArticleModeration(article) {
+  article.moderation = moderateContent(article, store.settings?.moderationThresholds);
+  article.updatedAt = new Date().toISOString();
+}
+
 const articleDependentCollections = ['comments', 'bookmarks', 'readingHistory', 'freshnessAlerts', 'engagementEvents'];
 
 async function removeArticleDependents(articleId) {
@@ -289,6 +304,33 @@ router.post('/:id/submit', requireAuth, authorize('author', 'admin'), asyncHandl
   res.json({ article, moderation: article.moderation });
 }));
 
+router.put('/:id/autosave', requireAuth, authorize('author', 'admin'), [
+  body('title').optional().trim().isLength({ min: 4, max: 180 }),
+  body('content').optional().trim().isLength({ min: 30, max: 100000 }),
+  body('summary').optional().isString().isLength({ max: 500 }),
+  body('tags').optional().isArray({ max: 20 }),
+  body('tags.*').optional().isString().isLength({ max: 50 }).withMessage('Each tag can contain at most 50 characters.'),
+  body('categoryIds').optional().isArray({ max: 10 }).custom(existingCategories).withMessage('Choose existing categories.'),
+  body('coverImage').optional({ checkFalsy: true }).isURL({ protocols: ['http', 'https'], require_protocol: true }).withMessage('Cover image must be a valid http(s) URL.'),
+  body('quiz').optional({ nullable: true }).custom(isValidQuiz).withMessage('Quiz must contain 1-20 questions, each with 2-6 options and a valid correct answer.'),
+], asyncHandler(async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+  if (req.body.status !== undefined) return res.status(400).json({ message: 'Autosave cannot change article status.' });
+
+  const article = store.articles.find((item) => item.id === req.params.id);
+  if (!article) return res.status(404).json({ message: 'Article not found.' });
+  if (!canViewPrivateArticle(req.user, article)) return res.status(403).json({ message: 'You can only autosave your own content.' });
+  if (!['draft', 'quarantined', 'rejected', 'changes_requested'].includes(article.status)) {
+    return res.status(409).json({ message: 'Only drafts and returned articles can be autosaved.' });
+  }
+
+  updateArticleFields(article, req.body);
+  refreshArticleModeration(article);
+  await saveRecord('articles', article);
+  res.json({ article });
+}));
+
 router.put('/:id', requireAuth, authorize('author', 'admin'), (req, res, next) => {
   const article = store.articles.find((item) => item.id === req.params.id);
   if (!article) return res.status(404).json({ message: 'Article not found.' });
@@ -314,13 +356,7 @@ router.put('/:id', requireAuth, authorize('author', 'admin'), (req, res, next) =
   if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
   const article = store.articles.find((item) => item.id === req.params.id);
-  if (req.body.title !== undefined) article.title = req.body.title;
-  if (req.body.summary !== undefined) article.summary = req.body.summary;
-  if (req.body.content !== undefined) article.content = req.body.content;
-  if (req.body.categoryIds !== undefined) article.categoryIds = req.body.categoryIds;
-  if (req.body.tags !== undefined) article.tags = req.body.tags.map((tag) => String(tag).trim()).filter(Boolean);
-  if (req.body.coverImage !== undefined) article.coverImage = req.body.coverImage;
-  if (req.body.quiz !== undefined) article.quiz = normalizeQuiz(req.body.quiz);
+  updateArticleFields(article, req.body);
   if (req.body.status && req.user.role === 'admin' && articleStatuses.has(req.body.status)) article.status = req.body.status;
   if (article.status === 'published' && !article.publishedAt) article.publishedAt = new Date().toISOString();
   if (req.user.role !== 'admin' && article.status === 'published') {
@@ -328,8 +364,7 @@ router.put('/:id', requireAuth, authorize('author', 'admin'), (req, res, next) =
     article.review = { ...(article.review || {}), submittedAt: new Date().toISOString() };
     delete article.publishedAt;
   }
-  article.moderation = moderateContent(article, store.settings?.moderationThresholds);
-  article.updatedAt = new Date().toISOString();
+  refreshArticleModeration(article);
   await saveRecord('articles', article);
   await recordAudit({ actorId: req.user.id, action: 'article.update', targetType: 'article', targetId: article.id, outcome: article.status });
   res.json({ article });

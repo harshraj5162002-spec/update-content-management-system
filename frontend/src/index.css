@@ -955,9 +955,10 @@ th {
 .notification-item.unread { border-color: rgba(141,110,248,.55); background: rgba(141,110,248,.07); }
 .editor-form { display: grid; gap: 16px; }
 .editor-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
-.editor-autosave, .editor-recovery { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; color: var(--text); background: var(--surface); }
+.editor-cloud-status, .editor-autosave, .editor-recovery { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; color: var(--text); background: var(--surface); }
+.editor-cloud-status { align-items: flex-start; flex-direction: column; gap: 3px; border-color: rgba(49, 91, 82, .25); }
 .editor-autosave { align-items: flex-start; flex-direction: column; gap: 3px; }
-.editor-autosave span, .editor-recovery p { margin: 0; color: var(--text-muted); font-size: .82rem; }
+.editor-cloud-status span, .editor-autosave span, .editor-recovery p { margin: 0; color: var(--text-muted); font-size: .82rem; }
 .editor-recovery > div:first-child { display: grid; gap: 4px; }
 .editor-recovery .button-row { flex: 0 0 auto; }
 .editor-preview-actions { display: flex; justify-content: flex-start; }

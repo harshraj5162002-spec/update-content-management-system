@@ -75,6 +75,56 @@ function readStoredArticleDraft(storageKey) {
   }
 }
 
+function getCloudAutosavePayload(form) {
+  const title = form.title.trim();
+  const content = form.content.trim();
+  const summary = form.summary.trim();
+  const tags = form.tags.split(',').map((tag) => tag.trim()).filter(Boolean);
+  const categoryIds = form.categoryIds;
+  const coverImage = form.coverImage.trim();
+
+  if (
+    title.length < 4 ||
+    title.length > 180 ||
+    content.length < 30 ||
+    content.length > 100000 ||
+    summary.length > 500 ||
+    tags.length > 20 ||
+    tags.some((tag) => tag.length > 50) ||
+    categoryIds.length > 10 ||
+    categoryIds.some((categoryId) => typeof categoryId !== 'string')
+  ) return null;
+
+  if (coverImage) {
+    try {
+      if (!['http:', 'https:'].includes(new URL(coverImage).protocol)) return null;
+    } catch {
+      return null;
+    }
+  }
+
+  if (form.quiz) {
+    const questions = form.quiz.questions;
+    if (
+      !Array.isArray(questions) ||
+      questions.length < 1 ||
+      questions.length > 20 ||
+      questions.some((question) =>
+        question.prompt.trim().length < 5 ||
+        question.prompt.length > 300 ||
+        question.options.length < 2 ||
+        question.options.length > 6 ||
+        question.options.some((option) => !option.trim() || option.length > 200) ||
+        !Number.isInteger(question.correctOptionIndex) ||
+        question.correctOptionIndex < 0 ||
+        question.correctOptionIndex >= question.options.length
+      )
+    ) return null;
+  }
+
+  return { ...form, title, summary, content, tags, categoryIds, coverImage };
+}
+
 function App() {
   const [token, setToken] = useState(() => new URLSearchParams(window.location.hash.slice(1)).get('token') || localStorage.getItem('cms-token') || '');
   const [user, setUser] = useState(null);
@@ -1449,6 +1499,10 @@ function ArticleEditorPage({ user, token }) {
   const [categories, setCategories] = useState([]);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [cloudSaveStatus, setCloudSaveStatus] = useState('idle');
+  const [cloudSavedAt, setCloudSavedAt] = useState('');
+  const [cloudSavedSnapshot, setCloudSavedSnapshot] = useState('');
+  const [cloudError, setCloudError] = useState('');
   const [message, setMessage] = useState('');
   const [autoSaveStatus, setAutoSaveStatus] = useState('idle');
   const [localSavedAt, setLocalSavedAt] = useState(recoveryDraft?.savedAt || '');
@@ -1461,6 +1515,8 @@ function ArticleEditorPage({ user, token }) {
   const formSnapshot = JSON.stringify(form);
   const lastLocalSnapshotRef = useRef(formSnapshot);
   const latestFormRef = useRef(form);
+  const cloudArticleIdRef = useRef(id || '');
+  const cloudAttemptedSnapshotRef = useRef('');
 
   useEffect(() => {
     latestFormRef.current = form;
@@ -1473,6 +1529,10 @@ function ArticleEditorPage({ user, token }) {
       apiRequest(`/articles/${id}`).then((article) => {
         if (!active) return;
         const articleForm = { title: article.title, summary: article.summary, content: article.content, tags: (article.tags || []).join(', '), categoryIds: article.categoryIds || [], coverImage: article.coverImage || '', quiz: article.quiz || null };
+        cloudArticleIdRef.current = article.id;
+        setCloudSavedSnapshot(JSON.stringify(articleForm));
+        setCloudSavedAt(article.updatedAt || '');
+        setCloudSaveStatus('saved');
         lastLocalSnapshotRef.current = JSON.stringify(articleForm);
         setForm(articleForm);
         setArticleReview({ status: article.status, review: article.review });
@@ -1513,6 +1573,66 @@ function ArticleEditorPage({ user, token }) {
     return () => clearTimeout(timer);
   }, [editorLoaded, form, formSnapshot, recoveryDraft, storageKey, token, user]);
 
+  const cloudPayload = getCloudAutosavePayload(form);
+  const canCloudAutosave = !id || ['draft', 'quarantined', 'rejected', 'changes_requested'].includes(articleReview?.status);
+  const cloudNeedsSave = Boolean(cloudPayload && formSnapshot !== cloudSavedSnapshot);
+
+  useEffect(() => {
+    const payload = getCloudAutosavePayload(form);
+    if (
+      !editorLoaded ||
+      busy ||
+      !payload ||
+      !canCloudAutosave ||
+      !token ||
+      !user ||
+      !['author', 'admin'].includes(user.role) ||
+      formSnapshot === cloudSavedSnapshot ||
+      cloudSaveStatus === 'saving' ||
+      (cloudSaveStatus === 'error' && cloudAttemptedSnapshotRef.current === formSnapshot)
+    ) return undefined;
+
+    const snapshot = formSnapshot;
+    let requestStarted = false;
+    const timer = setTimeout(async () => {
+      requestStarted = true;
+      cloudAttemptedSnapshotRef.current = snapshot;
+      setCloudSaveStatus('saving');
+      setCloudError('');
+      const currentArticleId = cloudArticleIdRef.current || id;
+      try {
+        const result = currentArticleId
+          ? await apiRequest(`/articles/${encodeURIComponent(currentArticleId)}/autosave`, { method: 'PUT', body: JSON.stringify(payload) })
+          : await apiRequest('/articles', { method: 'POST', body: JSON.stringify(payload) });
+        const savedArticle = result.article;
+        cloudArticleIdRef.current = savedArticle.id;
+        setCloudSavedSnapshot(snapshot);
+        setCloudSavedAt(savedArticle.updatedAt || new Date().toISOString());
+        setCloudSaveStatus('saved');
+        setArticleReview({ status: savedArticle.status, review: savedArticle.review });
+
+        if (JSON.stringify(latestFormRef.current) === snapshot) {
+          try {
+            localStorage.removeItem(storageKey);
+            lastLocalSnapshotRef.current = snapshot;
+            setLocalSavedAt('');
+            setAutoSaveStatus('idle');
+            setRecovery((current) => ({ ...current, draft: null, error: '' }));
+          } catch {
+            setRecovery((current) => ({ ...current, error: 'The draft is saved to the cloud, but its local backup could not be removed.' }));
+          }
+        }
+      } catch (saveError) {
+        setCloudSaveStatus('error');
+        setCloudError(saveError.message);
+      }
+    }, 1500);
+
+    return () => {
+      if (!requestStarted) clearTimeout(timer);
+    };
+  }, [articleReview?.status, busy, canCloudAutosave, cloudSaveStatus, cloudSavedSnapshot, editorLoaded, form, formSnapshot, id, storageKey, token, user]);
+
   if (!token) return <AccessNotice message="Sign in with an author or admin account to write articles." />;
   if (!user) return <div className="page-panel">Checking your account…</div>;
   if (!['author', 'admin'].includes(user.role)) return <AccessNotice message="Only authors and admins can create or edit articles." />;
@@ -1544,11 +1664,17 @@ function ArticleEditorPage({ user, token }) {
     setError('');
     setMessage('');
     const payload = { ...form, tags: form.tags.split(',').map((tag) => tag.trim()).filter(Boolean) };
+    const currentArticleId = cloudArticleIdRef.current || id;
     try {
-      const result = id
-        ? await apiRequest(`/articles/${id}`, { method: 'PUT', body: JSON.stringify(payload) })
+      const result = currentArticleId
+        ? await apiRequest(`/articles/${encodeURIComponent(currentArticleId)}`, { method: 'PUT', body: JSON.stringify(payload) })
         : await apiRequest('/articles', { method: 'POST', body: JSON.stringify(payload) });
       const article = result.article;
+      cloudArticleIdRef.current = article.id;
+      setCloudSavedSnapshot(JSON.stringify(form));
+      setCloudSavedAt(article.updatedAt || new Date().toISOString());
+      setCloudSaveStatus('saved');
+      setCloudError('');
       if (submitForReview) {
         const submission = await apiRequest(`/articles/${article.id}/submit`, { method: 'POST', body: JSON.stringify({}) });
         setMessage(`Article ${submission.article.status}. ${submission.moderation.reasons.join(' ')}`);
@@ -1659,9 +1785,14 @@ function ArticleEditorPage({ user, token }) {
   return <main className="page-content"><PageHeading eyebrow="Author workspace" title={id ? 'Edit article' : 'Write an article'} description="Submitted articles and quizzes require administrator approval before publication." />
     <form className="section-card editor-form" onSubmit={(event) => save(event)}>
       {articleReview && <div className="note-card"><strong>Current status: {articleReview.status}</strong>{articleReview.review?.feedback && <p>Reviewer feedback: {articleReview.review.feedback}</p>}</div>}
+      <div className="editor-cloud-status" role="status">
+        <strong>{cloudSaveStatus === 'saving' ? 'Saving draft to cloud…' : cloudSaveStatus === 'error' ? 'Cloud autosave failed' : !canCloudAutosave ? 'Cloud autosave paused for this article status' : !cloudPayload ? 'Cloud autosave waiting for required fields' : cloudNeedsSave ? 'Cloud sync scheduled' : cloudSavedAt ? 'Draft saved to cloud' : 'Cloud autosave is ready'}</strong>
+        <span>{cloudSaveStatus === 'error' ? 'Fix the issue below or edit the draft to retry.' : !canCloudAutosave ? 'Use the existing workflow buttons to save or submit this article.' : !cloudPayload ? 'Complete the title and article content; incomplete work remains protected by this browser’s local recovery copy.' : cloudNeedsSave ? 'Changes sync automatically after you pause typing.' : cloudSavedAt ? `Last synced ${new Date(cloudSavedAt).toLocaleString()}.` : 'Valid drafts sync to the server and are available from your author workspace.'}</span>
+      </div>
+      {cloudSaveStatus === 'error' && cloudError && <p className="error-panel inline-error" role="alert">{cloudError}</p>}
       <div className="editor-autosave" role="status">
         <strong>{autoSaveStatus === 'pending' ? 'Saving locally…' : autoSaveStatus === 'saved' ? 'Draft saved on this device' : autoSaveStatus === 'error' ? 'Local autosave unavailable' : 'Autosave is ready'}</strong>
-        <span>{localSavedAt ? `Last saved ${new Date(localSavedAt).toLocaleString()}` : 'Changes are saved in this browser after you pause typing.'}</span>
+        <span>{localSavedAt ? `Local recovery copy saved ${new Date(localSavedAt).toLocaleString()}` : 'A local recovery copy is kept until the draft syncs to the cloud.'}</span>
       </div>
       {recoveryDraft && <div className="editor-recovery" role="status">
         <div><strong>Unsaved local draft found</strong><p>Saved on this device {new Date(recoveryDraft.savedAt).toLocaleString()}. Restore it or discard it.</p></div>
@@ -1765,7 +1896,7 @@ function ArticleEditorPage({ user, token }) {
       <fieldset className="interest-fieldset"><legend>Categories</legend>{categories.map((category) => <label key={category.id} className="checkbox-label"><input type="checkbox" checked={form.categoryIds.includes(category.id)} onChange={(event) => setForm({ ...form, categoryIds: event.target.checked ? [...form.categoryIds, category.id] : form.categoryIds.filter((item) => item !== category.id) })} />{category.name}</label>)}</fieldset>
       {error && <div className="error-panel inline-error">{error}</div>}
       {message && <p className="success-message" role="status">{message}</p>}
-      <div className="button-row"><button className="secondary-button" type="submit" disabled={busy}>{busy ? 'Saving…' : 'Save draft'}</button><button className="primary-button" type="button" disabled={busy} onClick={(event) => save(event, true)}>{busy ? 'Submitting…' : 'Submit for review'}</button></div>
+      <div className="button-row"><button className="secondary-button" type="submit" disabled={busy || cloudSaveStatus === 'saving'}>{busy || cloudSaveStatus === 'saving' ? 'Saving…' : 'Save draft'}</button><button className="primary-button" type="button" disabled={busy || cloudSaveStatus === 'saving'} onClick={(event) => save(event, true)}>{busy || cloudSaveStatus === 'saving' ? 'Saving…' : 'Submit for review'}</button></div>
     </form>
   </main>;
 }

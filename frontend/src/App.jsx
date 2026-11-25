@@ -32,6 +32,49 @@ async function apiRequest(path, options = {}) {
   return response.json();
 }
 
+function isStoredArticleDraft(value) {
+  const form = value?.form;
+  const quiz = form?.quiz;
+  return Boolean(
+    value &&
+    value.version === 1 &&
+    typeof value.savedAt === 'string' &&
+    !Number.isNaN(Date.parse(value.savedAt)) &&
+    form &&
+    typeof form.title === 'string' &&
+    typeof form.summary === 'string' &&
+    typeof form.content === 'string' &&
+    typeof form.tags === 'string' &&
+    Array.isArray(form.categoryIds) &&
+    typeof form.coverImage === 'string' &&
+    (quiz === null || (
+      quiz &&
+      Array.isArray(quiz.questions) &&
+      quiz.questions.every((question) =>
+        question &&
+        typeof question.prompt === 'string' &&
+        Array.isArray(question.options) &&
+        question.options.every((option) => typeof option === 'string') &&
+        Number.isInteger(question.correctOptionIndex)
+      )
+    ))
+  );
+}
+
+function readStoredArticleDraft(storageKey) {
+  try {
+    const saved = localStorage.getItem(storageKey);
+    if (!saved) return { draft: null, error: '' };
+    const parsed = JSON.parse(saved);
+    if (!isStoredArticleDraft(parsed)) {
+      return { draft: null, error: 'A saved local draft could not be read. It has been left untouched.' };
+    }
+    return { draft: parsed, error: '' };
+  } catch {
+    return { draft: null, error: 'Could not access the saved local draft in this browser.' };
+  }
+}
+
 function App() {
   const [token, setToken] = useState(() => new URLSearchParams(window.location.hash.slice(1)).get('token') || localStorage.getItem('cms-token') || '');
   const [user, setUser] = useState(null);
@@ -207,8 +250,8 @@ function App() {
           <Route path="/settings" element={<SettingsPage user={user} />} />
           <Route path="/author" element={<AuthorDashboardPage user={user} />} />
           <Route path="/author/articles" element={<AuthorArticlesPage user={user} />} />
-          <Route path="/author/new" element={<ArticleEditorPage user={user} token={token} />} />
-          <Route path="/author/edit/:id" element={<ArticleEditorPage user={user} token={token} />} />
+          <Route path="/author/new" element={<ArticleEditorPage key={`${location.pathname}:${user?.id || 'loading'}`} user={user} token={token} />} />
+          <Route path="/author/edit/:id" element={<ArticleEditorPage key={`${location.pathname}:${user?.id || 'loading'}`} user={user} token={token} />} />
           <Route path="/author/analytics" element={<AuthorAnalyticsPage user={user} />} />
           <Route path="/author/freshness" element={<FreshnessPage />} />
           <Route path="/ai-tools" element={<AIToolsPage />} />
@@ -1396,27 +1439,104 @@ function AuthorArticlesPage({ user }) {
 function ArticleEditorPage({ user, token }) {
   const { id } = useParams();
   const navigate = useNavigate();
+  const storageKey = `signal-cms:article-draft:${user?.id || 'unknown'}:${id || 'new'}`;
+  const [recovery, setRecovery] = useState(() => readStoredArticleDraft(storageKey));
+  const recoveryDraft = recovery.draft;
+  const recoveryError = recovery.error;
   const [form, setForm] = useState({ title: '', summary: '', content: '', tags: '', categoryIds: [], coverImage: '', quiz: null });
+  const [editorLoaded, setEditorLoaded] = useState(!id);
   const [articleReview, setArticleReview] = useState(null);
   const [categories, setCategories] = useState([]);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
+  const [autoSaveStatus, setAutoSaveStatus] = useState('idle');
+  const [localSavedAt, setLocalSavedAt] = useState(recoveryDraft?.savedAt || '');
+  const [showPreview, setShowPreview] = useState(false);
   const [suggestions, setSuggestions] = useState([]);
   const [suggesting, setSuggesting] = useState(false);
   const [assistantInput, setAssistantInput] = useState('');
   const [assistantMessages, setAssistantMessages] = useState([]);
   const [assistantLoading, setAssistantLoading] = useState(false);
+  const formSnapshot = JSON.stringify(form);
+  const lastLocalSnapshotRef = useRef(formSnapshot);
+  const latestFormRef = useRef(form);
+
   useEffect(() => {
+    latestFormRef.current = form;
+  }, [form]);
+
+  useEffect(() => {
+    let active = true;
     apiRequest('/categories').then(setCategories).catch((loadError) => setError(loadError.message));
-    if (id) apiRequest(`/articles/${id}`).then((article) => {
-      setForm({ title: article.title, summary: article.summary, content: article.content, tags: (article.tags || []).join(', '), categoryIds: article.categoryIds || [], coverImage: article.coverImage || '', quiz: article.quiz || null });
-      setArticleReview({ status: article.status, review: article.review });
-    }).catch((loadError) => setError(loadError.message));
+    if (id) {
+      apiRequest(`/articles/${id}`).then((article) => {
+        if (!active) return;
+        const articleForm = { title: article.title, summary: article.summary, content: article.content, tags: (article.tags || []).join(', '), categoryIds: article.categoryIds || [], coverImage: article.coverImage || '', quiz: article.quiz || null };
+        lastLocalSnapshotRef.current = JSON.stringify(articleForm);
+        setForm(articleForm);
+        setArticleReview({ status: article.status, review: article.review });
+      }).catch((loadError) => {
+        if (active) setError(loadError.message);
+      }).finally(() => {
+        if (active) setEditorLoaded(true);
+      });
+    }
+    return () => { active = false; };
   }, [id]);
+
+  useEffect(() => {
+    if (
+      !editorLoaded ||
+      recoveryDraft ||
+      !token ||
+      !user ||
+      !['author', 'admin'].includes(user.role) ||
+      formSnapshot === lastLocalSnapshotRef.current
+    ) return undefined;
+
+    setAutoSaveStatus('pending');
+    const timer = setTimeout(() => {
+      const savedAt = new Date().toISOString();
+      try {
+        localStorage.setItem(storageKey, JSON.stringify({ version: 1, savedAt, form }));
+        lastLocalSnapshotRef.current = formSnapshot;
+        setLocalSavedAt(savedAt);
+        setAutoSaveStatus('saved');
+        setRecovery((current) => ({ ...current, error: '' }));
+      } catch {
+        setAutoSaveStatus('error');
+        setRecovery((current) => ({ ...current, error: 'Autosave failed. Check browser storage availability and save the draft manually.' }));
+      }
+    }, 800);
+
+    return () => clearTimeout(timer);
+  }, [editorLoaded, form, formSnapshot, recoveryDraft, storageKey, token, user]);
+
   if (!token) return <AccessNotice message="Sign in with an author or admin account to write articles." />;
   if (!user) return <div className="page-panel">Checking your account…</div>;
   if (!['author', 'admin'].includes(user.role)) return <AccessNotice message="Only authors and admins can create or edit articles." />;
+  if (!editorLoaded) return <main className="page-content"><div className="page-panel">Loading article editor…</div></main>;
+
+  function restoreLocalDraft() {
+    setForm(recoveryDraft.form);
+    lastLocalSnapshotRef.current = JSON.stringify(recoveryDraft.form);
+    setRecovery((current) => ({ ...current, draft: null, error: '' }));
+    setLocalSavedAt(recoveryDraft.savedAt);
+    setAutoSaveStatus('saved');
+  }
+
+  function discardLocalDraft() {
+    try {
+      localStorage.removeItem(storageKey);
+      lastLocalSnapshotRef.current = formSnapshot;
+      setRecovery((current) => ({ ...current, draft: null, error: '' }));
+      setLocalSavedAt('');
+      setAutoSaveStatus('idle');
+    } catch {
+      setRecovery((current) => ({ ...current, error: 'Could not remove the saved local draft from this browser.' }));
+    }
+  }
 
   async function save(event, submitForReview = false) {
     event?.preventDefault();
@@ -1434,6 +1554,17 @@ function ArticleEditorPage({ user, token }) {
         setMessage(`Article ${submission.article.status}. ${submission.moderation.reasons.join(' ')}`);
       } else {
         setMessage(article.status === 'pending' ? 'Changes saved. This article is awaiting admin approval.' : 'Draft saved.');
+      }
+      if (JSON.stringify(latestFormRef.current) === JSON.stringify(form)) {
+        try {
+          localStorage.removeItem(storageKey);
+          lastLocalSnapshotRef.current = JSON.stringify(form);
+          setRecovery((current) => ({ ...current, draft: null, error: '' }));
+          setLocalSavedAt('');
+          setAutoSaveStatus('idle');
+        } catch {
+          setRecovery((current) => ({ ...current, error: 'The article was saved, but its local recovery copy could not be removed.' }));
+        }
       }
       if (!id || submitForReview) navigate('/author/articles');
     } catch (saveError) { setError(saveError.message); }
@@ -1528,6 +1659,15 @@ function ArticleEditorPage({ user, token }) {
   return <main className="page-content"><PageHeading eyebrow="Author workspace" title={id ? 'Edit article' : 'Write an article'} description="Submitted articles and quizzes require administrator approval before publication." />
     <form className="section-card editor-form" onSubmit={(event) => save(event)}>
       {articleReview && <div className="note-card"><strong>Current status: {articleReview.status}</strong>{articleReview.review?.feedback && <p>Reviewer feedback: {articleReview.review.feedback}</p>}</div>}
+      <div className="editor-autosave" role="status">
+        <strong>{autoSaveStatus === 'pending' ? 'Saving locally…' : autoSaveStatus === 'saved' ? 'Draft saved on this device' : autoSaveStatus === 'error' ? 'Local autosave unavailable' : 'Autosave is ready'}</strong>
+        <span>{localSavedAt ? `Last saved ${new Date(localSavedAt).toLocaleString()}` : 'Changes are saved in this browser after you pause typing.'}</span>
+      </div>
+      {recoveryDraft && <div className="editor-recovery" role="status">
+        <div><strong>Unsaved local draft found</strong><p>Saved on this device {new Date(recoveryDraft.savedAt).toLocaleString()}. Restore it or discard it.</p></div>
+        <div className="button-row"><button type="button" className="primary-button" onClick={restoreLocalDraft}>Restore draft</button><button type="button" className="secondary-button" onClick={discardLocalDraft}>Discard</button></div>
+      </div>}
+      {recoveryError && <p className="error-panel inline-error" role="alert">{recoveryError}</p>}
       <div className="editor-toolbar"><span className="muted-copy">AI suggestions never overwrite your draft automatically.</span><button type="button" className="secondary-button" disabled={suggesting} onClick={suggestImprovements}><Sparkles size={15} />{suggesting ? 'Analyzing…' : 'Suggest improvements'}</button></div>
       <section className="editor-copilot" aria-labelledby="editor-copilot-title">
         <div className="section-header">
@@ -1562,6 +1702,17 @@ function ArticleEditorPage({ user, token }) {
       <label>Title<input value={form.title} maxLength={180} minLength={4} required onChange={(event) => setForm({ ...form, title: event.target.value })} /></label>
       <label>Summary<textarea value={form.summary} maxLength={500} onChange={(event) => setForm({ ...form, summary: event.target.value })} /></label>
       <label>Article content<textarea className="content-editor" value={form.content} minLength={30} maxLength={100000} required onChange={(event) => setForm({ ...form, content: event.target.value })} /></label>
+      <div className="editor-preview-actions"><button type="button" className="secondary-button" aria-expanded={showPreview} onClick={() => setShowPreview((current) => !current)}><Eye size={15} />{showPreview ? 'Hide preview' : 'Preview article'}</button></div>
+      {showPreview && <section className="editor-preview" aria-labelledby="editor-preview-title">
+        <div className="editor-preview-heading"><span className="eyebrow">Live preview</span><h2 id="editor-preview-title">{form.title.trim() || 'Article title preview'}</h2></div>
+        {form.coverImage && <div className="article-image-wrap"><img src={form.coverImage} alt="" /></div>}
+        <div className="article-header-panel">
+          {form.categoryIds.length > 0 && <div className="article-breadcrumbs">{categories.filter((category) => form.categoryIds.includes(category.id)).map((category) => category.name).join(' · ')}</div>}
+          <p className="article-summary">{form.summary || 'Your article summary will appear here.'}</p>
+          {!!form.tags.trim() && <div className="article-meta">{form.tags.split(',').map((tag) => tag.trim()).filter(Boolean).map((tag) => <span className="category-pill" key={tag}>{tag}</span>)}</div>}
+        </div>
+        <article className="article-body-panel"><p className="article-content-text">{form.content || 'Your article content will appear here.'}</p></article>
+      </section>}
       <section className="quiz-editor">
         <div className="section-header">
           <div><span className="eyebrow">Optional</span><h2>Article quiz</h2><p className="muted-copy">Add up to 20 questions with 2–6 answer options each.</p></div>

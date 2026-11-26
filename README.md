@@ -14,6 +14,7 @@ Signal CMS is an existing React and Express content-management application with 
 - Role-specific author, reader, and administrator analytics backed by recorded application data
 - Deterministic local summaries, writing suggestions, content checks, and moderation that work without AI credentials
 - Responsive React interface with an in-memory demo mode when MongoDB is unavailable
+- Standalone public landing page with separate entry points to discovery and the app
 
 ## Requirements
 
@@ -68,6 +69,8 @@ npm run dev
 ```
 
 Vite prints the local frontend URL (typically `http://localhost:5173`). The API defaults to port `5000`.
+
+The public landing page is served at `/`. Reader, author, and administrator workspaces remain separate at `/app`, `/author`, and `/admin`; the landing page's **Enter app** link adapts to the signed-in role.
 
 ## Demo accounts
 

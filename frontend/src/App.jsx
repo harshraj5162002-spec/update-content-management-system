@@ -186,7 +186,7 @@ function App() {
 
   const isAuthPage = ['/auth', '/forgot-password', '/reset-password'].includes(location.pathname);
   const readerLinks = user?.role === 'admin' || !token ? [] : [
-    { to: '/', label: 'Home', icon: LayoutDashboard },
+    { to: '/app', label: 'Home', icon: LayoutDashboard },
     ...(token ? [{ to: '/for-you', label: 'For you', icon: Sparkles }] : []),
     { to: '/trending', label: 'Trending', icon: TrendingUp },
     { to: '/explore', label: 'Explore', icon: Compass },
@@ -226,8 +226,12 @@ function App() {
       { to: '/settings', label: 'Settings', icon: Settings },
     ] : []),
   ];
-  const isAdminDashboard = user?.role === 'admin' && ['/', '/admin'].includes(location.pathname);
+  const isAdminDashboard = user?.role === 'admin' && ['/app', '/admin'].includes(location.pathname);
   const profileName = isAdminDashboard ? 'Admin' : user?.name || 'Account';
+
+  if (location.pathname === '/') {
+    return <LandingPage user={user} token={token} />;
+  }
 
   return (
     <div className={`app-shell${isAuthPage ? ' auth-shell' : ''}`}>
@@ -274,7 +278,7 @@ function App() {
                 </Link>
                 <button type="button" className="ghost-button logout-button" onClick={handleLogout} aria-label="Logout"><LogOut size={16} /></button>
               </div>
-            ) : ['/', '/admin'].includes(location.pathname) || location.pathname.startsWith('/admin/') ? (
+            ) : ['/app', '/admin'].includes(location.pathname) || location.pathname.startsWith('/admin/') ? (
               <>
                 <Link to="/notifications" className="ghost-button notification-link" aria-label="Notifications"><Bell size={17} /><span className="notification-count">3</span></Link>
                 <Link to="/auth" className="profile-chip dashboard-profile-chip" aria-label="Open account">
@@ -291,7 +295,7 @@ function App() {
         <div className="workspace-grid">
           <div className="workspace-route">
             <Routes>
-              <Route path="/" element={!token || user?.role === 'admin' ? <AdminDashboardPage user={user} /> : <HomePage user={user} />} />
+              <Route path="/app" element={!token || user?.role === 'admin' ? <AdminDashboardPage user={user} /> : <HomePage user={user} />} />
               <Route path="/auth" element={<AuthPage onLogin={handleLogin} />} />
               <Route path="/forgot-password" element={<ForgotPasswordPage />} />
               <Route path="/reset-password" element={<ResetPasswordPage />} />
@@ -335,9 +339,153 @@ function App() {
   );
 }
 
+function LandingPage({ user, token }) {
+  const appPath = !token ? '/app' : user?.role === 'admin' ? '/admin' : user?.role === 'author' ? '/author' : '/app';
+
+  return (
+    <main className="landing-page">
+      <section className="landing-hero">
+        <LandingIllustration />
+        <header className="landing-nav">
+          <Link to="/" className="landing-brand" aria-label="Signal home">
+            <span className="landing-brand-mark"><BookOpen size={19} /></span>
+            <span>Signal<span className="landing-brand-light">CMS</span></span>
+          </Link>
+          <nav aria-label="Main navigation">
+            <Link to="/explore">Explore</Link>
+            <Link to="/trending">Discover</Link>
+            <Link to="/authors">Contributors</Link>
+            <a href="#how-it-works">Our approach</a>
+          </nav>
+          <Link to={appPath} className="landing-enter">Enter app <span aria-hidden="true">↗</span></Link>
+        </header>
+
+        <div className="landing-hero-content">
+          <article className="landing-copy-card">
+            <span className="landing-eyebrow"><span aria-hidden="true" />A community for curious minds</span>
+            <div className="landing-card-brand">
+              <span className="landing-card-mark">S</span>
+              <strong>Signal</strong>
+            </div>
+            <h1>Discover ideas.<br /><em>Connect perspectives.</em></h1>
+            <p>A collaborative space where thoughtful stories spark better conversations and good ideas grow into lasting knowledge.</p>
+            <div className="landing-actions">
+              <Link to="/trending" className="landing-primary">Explore the community <span aria-hidden="true">→</span></Link>
+              <a href="#how-it-works" className="landing-secondary">See how it works <span aria-hidden="true">↓</span></a>
+            </div>
+          </article>
+        </div>
+
+        <div className="landing-art-caption" aria-hidden="true">
+          <span className="landing-caption-dot" />
+          <span>Many voices. One shared space.</span>
+        </div>
+      </section>
+
+      <section className="landing-about" id="how-it-works">
+        <div className="landing-about-heading">
+          <span className="landing-section-eyebrow">A better place for ideas</span>
+          <h2>Read with curiosity.<br /><em>Share with purpose.</em></h2>
+          <p>Signal brings readers and writers together around clear, useful stories — with thoughtful discovery and an editorial process built for trust.</p>
+        </div>
+        <div className="landing-feature-grid">
+          <article className="landing-feature">
+            <span className="landing-feature-icon"><Compass size={20} /></span>
+            <h3>Find a fresh perspective</h3>
+            <p>Explore stories and topics that make room for more than one point of view.</p>
+          </article>
+          <article className="landing-feature">
+            <span className="landing-feature-icon landing-feature-icon-pink"><PenLine size={20} /></span>
+            <h3>Give good ideas a voice</h3>
+            <p>Writers can shape drafts into polished stories with a clear path to publishing.</p>
+          </article>
+          <article className="landing-feature">
+            <span className="landing-feature-icon landing-feature-icon-green"><Users size={20} /></span>
+            <h3>Grow knowledge together</h3>
+            <p>Join a community that values useful conversations, context, and care.</p>
+          </article>
+        </div>
+        <Link to={appPath} className="landing-about-link">Step into Signal <span aria-hidden="true">→</span></Link>
+      </section>
+    </main>
+  );
+}
+
+function LandingIllustration() {
+  return (
+    <svg className="landing-illustration" viewBox="0 0 1600 900" preserveAspectRatio="xMidYMid slice" aria-hidden="true" focusable="false">
+      <defs>
+        <linearGradient id="landing-wall" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stopColor="#e9f8ff" />
+          <stop offset="1" stopColor="#b9e3f7" />
+        </linearGradient>
+        <linearGradient id="landing-floor" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor="#f4e3bf" />
+          <stop offset="1" stopColor="#e6c997" />
+        </linearGradient>
+        <pattern id="landing-dots" width="28" height="28" patternUnits="userSpaceOnUse">
+          <circle cx="4" cy="4" r="2" fill="#ffffff" opacity=".55" />
+        </pattern>
+      </defs>
+      <rect width="1600" height="900" fill="url(#landing-wall)" />
+      <path d="M0 0h1600v122H0z" fill="#f8fcff" opacity=".72" />
+      <path d="M0 690h1600v210H0z" fill="url(#landing-floor)" />
+      <path d="M0 685h1600" stroke="#d3bd96" strokeWidth="8" />
+      <path d="M90 88h320l-84 54H90zM490 85h220l-78 48H430zM880 75h350l-104 61H827z" fill="#d2edfa" stroke="#97cce5" strokeWidth="7" strokeLinejoin="round" />
+      <rect x="1240" y="115" width="290" height="350" rx="34" fill="#4aabdf" />
+      <rect x="1257" y="132" width="256" height="316" rx="25" fill="url(#landing-dots)" />
+      <path d="M1296 182c52-76 83 63 130-4s69-54 80-10M1285 244c53-74 85 60 136-9s72-48 83-6" fill="none" stroke="#ffcf4f" strokeWidth="18" strokeLinecap="round" />
+      <rect x="875" y="208" width="250" height="190" rx="30" fill="#152f55" />
+      <path d="M900 340c29-72 72-15 93-78s73-42 102 2 65 21 80-20v123H900z" fill="#24a4e7" />
+      <circle cx="963" cy="270" r="23" fill="#64c8f3" />
+      <circle cx="1051" cy="300" r="15" fill="#64c8f3" />
+      <circle cx="1096" cy="262" r="13" fill="#64c8f3" />
+      <rect x="563" y="300" width="200" height="160" rx="22" fill="#f4d2ec" stroke="#d58bc4" strokeWidth="7" />
+      <path d="M570 340h186M570 378h186M570 416h186M610 305v150M650 305v150M690 305v150M730 305v150" stroke="#d88dc5" strokeWidth="4" opacity=".8" />
+      <circle cx="790" cy="404" r="66" fill="#ffffff" opacity=".8" />
+      <circle cx="790" cy="404" r="48" fill="#51c2d0" />
+      <path d="M744 397c25-26 64-26 92 0M751 421c23 23 54 25 79 0" fill="none" stroke="#ffe46a" strokeWidth="13" strokeLinecap="round" />
+      <path d="M104 330c-60-48-36-129 25-132 0-77 87-98 120-30 65-10 97 52 66 103 41 45 4 106-54 103H137c-44 0-64-22-33-44z" fill="#f25d3f" />
+      <path d="M96 287c-34-40-8-92 32-89-3-57 63-75 87-28 47-8 71 38 46 74 31 33 4 74-38 74H124c-28 0-47-10-28-31z" fill="#e5549a" />
+      <rect y="640" width="1600" height="56" fill="#f6e5c4" />
+      <ellipse cx="535" cy="728" rx="356" ry="38" fill="#c59e68" opacity=".28" />
+      <ellipse cx="1158" cy="738" rx="370" ry="42" fill="#c59e68" opacity=".28" />
+      <path d="M0 626c208-40 410-15 590 28 218 51 469 37 700-16 120-27 214-43 310-20v78H0z" fill="#fff1d2" />
+      <path d="M725 640h570l-48 49H760z" fill="#a96c45" />
+      <path d="M795 689l-30 168M1238 689l45 168" stroke="#89573c" strokeWidth="18" strokeLinecap="round" />
+      <path d="M258 666l350 10-12 30-350-12z" fill="#40526a" />
+      <path d="M288 669l296 9-9 17-296-9z" fill="#a9bfce" />
+      <path d="M394 454c-12-52 10-96 52-103 43-7 75 28 65 75l-11 38z" fill="#402a2c" />
+      <ellipse cx="448" cy="438" rx="47" ry="58" fill="#9d5a42" />
+      <path d="M402 428c-4-48 23-83 62-79 32 4 45 23 48 52-26-12-35-29-39-45-7 27-35 42-71 43z" fill="#211e27" />
+      <path d="M366 568c24-68 139-76 173-4l34 106H338z" fill="#44a6db" />
+      <path d="M364 571c-37 16-61 47-82 74l-84-5c-19-1-24 19-4 28l108 22c18 4 37-3 50-17l38-43" fill="#9d5a42" />
+      <path d="M356 662l-23 96M525 665l34 91" stroke="#27364d" strokeWidth="28" strokeLinecap="round" />
+      <path d="M750 494c-5-47 20-84 61-85 39 0 64 34 56 77l-9 26-101 2z" fill="#30202a" />
+      <ellipse cx="807" cy="470" rx="45" ry="54" fill="#c47a59" />
+      <path d="M762 464c6-53 34-82 76-69 27 9 38 29 32 54-22-6-44-24-51-44-5 25-30 43-57 46z" fill="#1f202b" />
+      <path d="M755 545c25-37 89-39 117-2l34 109H714z" fill="#eb72bd" />
+      <path d="M758 558l-68 79-47 2M850 561l51 82" fill="none" stroke="#c47a59" strokeWidth="22" strokeLinecap="round" />
+      <path d="M753 648l-15 121M853 648l33 119" stroke="#34465a" strokeWidth="22" strokeLinecap="round" />
+      <path d="M1072 512c-7-51 17-88 60-92 47-4 72 35 59 81l-10 37-99 4z" fill="#29212a" />
+      <ellipse cx="1127" cy="486" rx="46" ry="56" fill="#a7664d" />
+      <path d="M1082 478c2-48 28-79 68-72 31 5 46 25 43 54-25-3-43-17-55-39-8 27-28 43-56 49z" fill="#252127" />
+      <path d="M1058 563c28-50 120-60 158-3l36 90h-230z" fill="#50a866" />
+      <path d="M1082 573l-63 63-47-14M1181 576l61 52" fill="none" stroke="#a7664d" strokeWidth="24" strokeLinecap="round" />
+      <path d="M1095 646l-4 100M1200 646l27 98" stroke="#364f46" strokeWidth="25" strokeLinecap="round" />
+      <circle cx="1160" cy="324" r="49" fill="#f9da55" />
+      <path d="M1120 325c26-20 53-18 80 1M1127 346c23 18 42 17 64-1" fill="none" stroke="#58b9ce" strokeWidth="13" strokeLinecap="round" />
+      <circle cx="1490" cy="555" r="74" fill="#f2a35e" />
+      <path d="M1421 534c8-57 50-85 91-59 35 22 44 66 22 100-23-8-41-22-53-48-9 26-29 41-56 47z" fill="#593b34" />
+      <path d="M1409 620c27-57 104-63 147-10l44 55h-218z" fill="#ec6687" />
+      <path d="M1344 690l216-10" stroke="#f8f2e7" strokeWidth="22" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 function SidebarLink({ item, onNavigate }) {
   const Icon = item.icon;
-  return <NavLink to={item.to} end={item.to === '/' || item.to === '/admin'} onClick={onNavigate} className={({ isActive }) => `sidebar-link${isActive ? ' active' : ''}`}><Icon size={17} /><span>{item.label}</span></NavLink>;
+  return <NavLink to={item.to} end={item.to === '/app' || item.to === '/admin'} onClick={onNavigate} className={({ isActive }) => `sidebar-link${isActive ? ' active' : ''}`}><Icon size={17} /><span>{item.label}</span></NavLink>;
 }
 
 function WorkspaceRail({ user }) {

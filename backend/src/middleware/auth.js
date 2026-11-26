@@ -7,6 +7,7 @@ function signToken(user) {
 }
 
 function isActiveUser(user) {
+  if (user.status === 'deleted' || user.deletedAt) return false;
   if (user.status === 'active') return true;
   return user.status === 'restricted' && user.restrictedUntil && new Date(user.restrictedUntil) <= new Date();
 }

@@ -1043,7 +1043,7 @@ function AuthPage({ onLogin }) {
   const navigate = useNavigate();
   const location = useLocation();
   const [mode, setMode] = useState('login');
-  const [form, setForm] = useState({ name: '', email: '', password: '', role: 'reader' });
+  const [form, setForm] = useState({ name: '', email: '', password: '', confirmPassword: '', role: 'reader' });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(() => new URLSearchParams(location.search).get('oauth_error') || '');
   const [showPassword, setShowPassword] = useState(false);
@@ -1062,6 +1062,10 @@ function AuthPage({ onLogin }) {
 
   async function handleSubmit(event) {
     event.preventDefault();
+    if (mode === 'signup' && form.password !== form.confirmPassword) {
+      setError('Passwords do not match.');
+      return;
+    }
     setLoading(true);
     setError('');
 
@@ -1122,12 +1126,12 @@ function AuthPage({ onLogin }) {
         <div className="auth-toggle">
           <button type="button" className={mode === 'login' ? 'active' : ''} onClick={() => {
             setMode('login');
-            setForm((current) => ({ ...current, email: '', password: '' }));
+            setForm((current) => ({ ...current, email: '', password: '', confirmPassword: '' }));
             setError('');
           }}>Login</button>
           <button type="button" className={mode === 'signup' ? 'active' : ''} onClick={() => {
             setMode('signup');
-            setForm((current) => ({ ...current, email: '', password: '', adminInviteCode: '', role: current.role === 'admin' ? 'reader' : current.role }));
+            setForm((current) => ({ ...current, email: '', password: '', confirmPassword: '', adminInviteCode: '', role: current.role === 'admin' ? 'reader' : current.role }));
             setError('');
           }}>Signup</button>
         </div>
@@ -1183,12 +1187,30 @@ function AuthPage({ onLogin }) {
           <label>
             Password
             <span className="password-field">
-              <input name="password" type={showPassword ? 'text' : 'password'} value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} required minLength={mode === 'signup' ? 8 : 1} autoComplete={mode === 'signup' ? 'new-password' : 'current-password'} />
+              <input name="password" type={showPassword ? 'text' : 'password'} value={form.password} onChange={(event) => { setForm({ ...form, password: event.target.value }); setError(''); }} required minLength={mode === 'signup' ? 8 : 1} autoComplete={mode === 'signup' ? 'new-password' : 'current-password'} />
               <button type="button" className="password-toggle" onClick={() => setShowPassword(!showPassword)} aria-label={showPassword ? 'Hide password' : 'Show password'}>
                 {showPassword ? <EyeOff size={17} /> : <Eye size={17} />}
               </button>
             </span>
+            {mode === 'signup' && <small className="muted-copy">Use at least 8 characters.</small>}
           </label>
+
+          {mode === 'signup' && (
+            <label>
+              Confirm password
+              <input
+                name="confirmPassword"
+                type={showPassword ? 'text' : 'password'}
+                value={form.confirmPassword}
+                onChange={(event) => { setForm({ ...form, confirmPassword: event.target.value }); setError(''); }}
+                required
+                minLength={8}
+                autoComplete="new-password"
+                aria-invalid={Boolean(form.confirmPassword && form.password !== form.confirmPassword)}
+              />
+              {form.confirmPassword && <small className="muted-copy" role="status">{form.password === form.confirmPassword ? 'Passwords match.' : 'Passwords do not match yet.'}</small>}
+            </label>
+          )}
 
           {mode === 'login' && form.role === 'admin' && (HAS_DEMO_ADMIN_CREDENTIALS ? (
             <div className="muted-copy">
@@ -1818,6 +1840,8 @@ function ArticleEditorPage({ user, token }) {
   const [form, setForm] = useState({ title: '', summary: '', content: '', tags: '', categoryIds: [], coverImage: '', quiz: null });
   const [editorLoaded, setEditorLoaded] = useState(!id);
   const [articleReview, setArticleReview] = useState(null);
+  const [revisions, setRevisions] = useState([]);
+  const [restoringRevisionId, setRestoringRevisionId] = useState('');
   const [categories, setCategories] = useState([]);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -1848,7 +1872,7 @@ function ArticleEditorPage({ user, token }) {
     let active = true;
     apiRequest('/categories').then(setCategories).catch((loadError) => setError(loadError.message));
     if (id) {
-      apiRequest(`/articles/${id}`).then((article) => {
+      apiRequest(`/articles/${id}`).then(async (article) => {
         if (!active) return;
         const articleForm = { title: article.title, summary: article.summary, content: article.content, tags: (article.tags || []).join(', '), categoryIds: article.categoryIds || [], coverImage: article.coverImage || '', quiz: article.quiz || null };
         cloudArticleIdRef.current = article.id;
@@ -1858,6 +1882,8 @@ function ArticleEditorPage({ user, token }) {
         lastLocalSnapshotRef.current = JSON.stringify(articleForm);
         setForm(articleForm);
         setArticleReview({ status: article.status, review: article.review });
+        const revisionData = await apiRequest(`/articles/${id}/revisions`);
+        if (active) setRevisions(revisionData.items || []);
       }).catch((loadError) => {
         if (active) setError(loadError.message);
       }).finally(() => {
@@ -1980,6 +2006,36 @@ function ArticleEditorPage({ user, token }) {
     }
   }
 
+  async function restoreArticleRevision(revision) {
+    if (!window.confirm(`Restore version ${revision.version}? It will be sent for administrator approval before it can be published.`)) return;
+    setRestoringRevisionId(revision.id);
+    setError('');
+    try {
+      const result = await apiRequest(`/articles/${encodeURIComponent(id)}/revisions/${encodeURIComponent(revision.id)}/restore`, { method: 'POST' });
+      const restoredForm = {
+        title: result.article.title,
+        summary: result.article.summary,
+        content: result.article.content,
+        tags: (result.article.tags || []).join(', '),
+        categoryIds: result.article.categoryIds || [],
+        coverImage: result.article.coverImage || '',
+        quiz: result.article.quiz || null,
+      };
+      setForm(restoredForm);
+      setCloudSavedSnapshot(JSON.stringify(restoredForm));
+      setCloudSavedAt(result.article.updatedAt);
+      setCloudSaveStatus('saved');
+      setCloudError('');
+      setArticleReview({ status: result.article.status, review: result.article.review });
+      setRevisions((current) => [
+        result.revision,
+        ...current.filter((item) => item.id !== result.revision.id),
+      ].sort((left, right) => right.version - left.version).slice(0, 20));
+      setMessage(`Version ${revision.version} restored and submitted for admin review.`);
+    } catch (restoreError) { setError(restoreError.message); }
+    finally { setRestoringRevisionId(''); }
+  }
+
   async function save(event, submitForReview = false) {
     event?.preventDefault();
     setBusy(true);
@@ -1999,7 +2055,10 @@ function ArticleEditorPage({ user, token }) {
       setCloudError('');
       if (submitForReview) {
         const submission = await apiRequest(`/articles/${article.id}/submit`, { method: 'POST', body: JSON.stringify({}) });
-        setMessage(`Article ${submission.article.status}. ${submission.moderation.reasons.join(' ')}`);
+        const submissionStatus = submission.article.status === 'quarantined'
+          ? 'sent to the administrator for review'
+          : 'submitted for administrator approval';
+        setMessage(`${submissionStatus}. ${submission.moderation.reasons.join(' ')}`);
       } else {
         setMessage(article.status === 'pending' ? 'Changes saved. This article is awaiting admin approval.' : 'Draft saved.');
       }
@@ -2216,9 +2275,10 @@ function ArticleEditorPage({ user, token }) {
       <label>Tags, comma separated<input value={form.tags} onChange={(event) => setForm({ ...form, tags: event.target.value })} placeholder="publishing, analytics, AI" /></label>
       <label>Cover image URL<input type="url" value={form.coverImage} onChange={(event) => setForm({ ...form, coverImage: event.target.value })} placeholder="https://…" /></label>
       <fieldset className="interest-fieldset"><legend>Categories</legend>{categories.map((category) => <label key={category.id} className="checkbox-label"><input type="checkbox" checked={form.categoryIds.includes(category.id)} onChange={(event) => setForm({ ...form, categoryIds: event.target.checked ? [...form.categoryIds, category.id] : form.categoryIds.filter((item) => item !== category.id) })} />{category.name}</label>)}</fieldset>
+      {id && <section className="section-card"><div className="section-header"><div><span className="eyebrow">Article history</span><h2>Submitted revisions</h2></div></div>{revisions.length ? <div className="notification-list">{revisions.map((revision) => <article className="notification-item" key={revision.id}><History size={18} /><div><strong>Version {revision.version}</strong><small>{revision.source === 'restore' ? `Restored from version ${revision.restoredFromVersion}` : 'Submitted for review'} · {new Date(revision.createdAt).toLocaleString()}</small><small>{revision.title}</small></div><button type="button" className="secondary-button" disabled={busy || Boolean(restoringRevisionId)} onClick={() => restoreArticleRevision(revision)}>{restoringRevisionId === revision.id ? 'Restoring…' : 'Restore version'}</button></article>)}</div> : <p className="muted-copy">No submitted revisions yet. A version is saved each time you submit the article for review.</p>}</section>}
       {error && <div className="error-panel inline-error">{error}</div>}
       {message && <p className="success-message" role="status">{message}</p>}
-      <div className="button-row"><button className="secondary-button" type="submit" disabled={busy || cloudSaveStatus === 'saving'}>{busy || cloudSaveStatus === 'saving' ? 'Saving…' : 'Save draft'}</button><button className="primary-button" type="button" disabled={busy || cloudSaveStatus === 'saving'} onClick={(event) => save(event, true)}>{busy || cloudSaveStatus === 'saving' ? 'Saving…' : 'Submit for review'}</button></div>
+      <div className="button-row"><button className="secondary-button" type="submit" disabled={busy || cloudSaveStatus === 'saving'}>{busy || cloudSaveStatus === 'saving' ? 'Saving…' : 'Save draft'}</button><button className="primary-button" type="button" disabled={busy || cloudSaveStatus === 'saving'} onClick={(event) => save(event, true)}>{busy || cloudSaveStatus === 'saving' ? 'Saving…' : 'Submit for admin approval'}</button></div>
     </form>
   </main>;
 }
@@ -2520,6 +2580,23 @@ function AdminUsersPage() {
       await load();
     } catch (actionError) { setError(actionError.message); }
   }
+  async function deleteUser(user) {
+    if (!window.confirm(`Schedule ${user.name}'s account for deletion? The account and articles will be hidden immediately and can be restored for 30 days.`)) return;
+    try {
+      setError('');
+      await apiRequest(`/moderation/users/${user.id}`, { method: 'DELETE' });
+      setMessage(`${user.name}'s account is scheduled for deletion and can be restored for 30 days.`);
+      await load();
+    } catch (actionError) { setError(actionError.message); }
+  }
+  async function restoreUser(user) {
+    try {
+      setError('');
+      await apiRequest(`/moderation/users/${user.id}/restore`, { method: 'POST' });
+      setMessage(`${user.name}'s account and articles were restored.`);
+      await load();
+    } catch (actionError) { setError(actionError.message); }
+  }
   async function giveReputation(userId) {
     if (!adjustment.reason.trim()) { setError('Add a reason before changing reputation.'); return; }
     try {
@@ -2529,10 +2606,10 @@ function AdminUsersPage() {
     } catch (actionError) { setError(actionError.message); }
   }
 
-  return <main className="page-content admin-page"><PageHeading eyebrow="Administration" title="User management" description="Manage roles, short-term restrictions, and audited reputation events." />
+  return <main className="page-content admin-page"><PageHeading eyebrow="Administration" title="User management" description="Manage roles, restrictions, reputation, and recoverable account deletion." />
     {error && <div className="page-panel error-panel">{error}</div>}{message && <p className="success-message">{message}</p>}
     <section className="section-card editor-form"><h2>Reputation adjustment</h2><label>Score change<select value={adjustment.delta} onChange={(event) => setAdjustment({ ...adjustment, delta: event.target.value })}><option value="1">+1</option><option value="3">+3</option><option value="-1">−1</option><option value="-3">−3</option></select></label><label>Reason<input value={adjustment.reason} maxLength={500} onChange={(event) => setAdjustment({ ...adjustment, reason: event.target.value })} /></label><p className="muted-copy">Select a user below and click “Record event”; the same reason cannot be recorded twice for a user on the same day.</p></section>
-    <div className="table-wrap section-card"><table><thead><tr><th>User</th><th>Email</th><th>Role</th><th>Status</th><th>Reputation</th><th>Actions</th></tr></thead><tbody>{users.map((user) => <tr key={user.id}><td>{user.name}</td><td>{user.email}</td><td><select aria-label={`Role for ${user.name}`} value={user.role} disabled={user.isCurrentUser} onChange={(event) => updateRole(user.id, event.target.value)}><option value="reader">Reader</option><option value="author">Author</option><option value="admin">Admin</option></select></td><td>{user.status}{user.restrictedUntil && <small> until {new Date(user.restrictedUntil).toLocaleString()}</small>}</td><td>{user.reputation ?? '—'}</td><td><div className="button-row">{user.status === 'restricted' ? <button className="secondary-button" onClick={() => clearRestriction(user)}>Lift restriction</button> : user.role !== 'admin' && <button className="secondary-button" onClick={() => setRestriction(user)}>Restrict 24h</button>}<button className="secondary-button" onClick={() => giveReputation(user.id)}>Record event</button></div></td></tr>)}</tbody></table></div>
+    <div className="table-wrap section-card"><table><thead><tr><th>User</th><th>Email</th><th>Role</th><th>Status</th><th>Reputation</th><th>Actions</th></tr></thead><tbody>{users.map((user) => <tr key={user.id}><td>{user.name}</td><td>{user.email}</td><td><select aria-label={`Role for ${user.name}`} value={user.role} disabled={user.isCurrentUser || user.status === 'deleted'} onChange={(event) => updateRole(user.id, event.target.value)}><option value="reader">Reader</option><option value="author">Author</option><option value="admin">Admin</option></select></td><td>{user.status}{user.restrictedUntil && <small> until {new Date(user.restrictedUntil).toLocaleString()}</small>}{user.status === 'deleted' && user.deletionExpiresAt && <small> · recover until {new Date(user.deletionExpiresAt).toLocaleString()}</small>}</td><td>{user.reputation ?? '—'}</td><td><div className="button-row">{user.status === 'deleted' ? <button className="primary-button" onClick={() => restoreUser(user)}>Restore account</button> : <>{user.status === 'restricted' ? <button className="secondary-button" onClick={() => clearRestriction(user)}>Lift restriction</button> : user.role !== 'admin' && <button className="secondary-button" onClick={() => setRestriction(user)}>Restrict 24h</button>}<button className="secondary-button" onClick={() => giveReputation(user.id)}>Record event</button><button className="secondary-button" disabled={user.isCurrentUser} onClick={() => deleteUser(user)}>Delete account</button></>}</div></td></tr>)}</tbody></table></div>
   </main>;
 }
 

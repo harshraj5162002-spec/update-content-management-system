@@ -3,6 +3,7 @@ const { users, articles, categories, comments, notifications } = require('./seed
 const store = {
   users: [...users],
   articles: [...articles],
+  articleRevisions: [],
   categories: [...categories],
   comments: [...comments],
   notifications: [...notifications],

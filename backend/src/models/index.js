@@ -48,6 +48,22 @@ const Article = createModel('Article', {
   updatedAt: { type: Date, default: Date.now },
 }, [[{ status: 1, publishedAt: -1 }], [{ authorId: 1, status: 1 }], [{ categoryIds: 1 }]]);
 
+const ArticleRevision = createModel('ArticleRevision', {
+  articleId: { type: String, required: true, index: true },
+  authorId: { type: String, required: true, index: true },
+  version: { type: Number, required: true },
+  title: { type: String, required: true },
+  summary: { type: String, default: '' },
+  content: { type: String, required: true },
+  categoryIds: { type: [String], default: [] },
+  tags: { type: [String], default: [] },
+  coverImage: { type: String, default: '' },
+  quiz: { type: Schema.Types.Mixed, default: null },
+  source: { type: String, enum: ['submission', 'restore'], required: true },
+  restoredFromVersion: { type: Number, default: undefined },
+  createdAt: { type: Date, default: Date.now },
+}, [[{ articleId: 1, version: 1 }, { unique: true }]]);
+
 const Category = createModel('Category', {
   name: { type: String, required: true, trim: true },
   description: { type: String, default: '' },
@@ -158,6 +174,7 @@ const SystemSettings = createModel('SystemSettings', {
 module.exports = {
   User,
   Article,
+  ArticleRevision,
   Category,
   Comment,
   ModerationResult,

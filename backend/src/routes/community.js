@@ -181,7 +181,7 @@ router.get('/authors', (req, res) => {
 });
 
 router.get('/authors/:id', (req, res) => {
-  const author = store.users.find((user) => user.id === req.params.id && ['author', 'admin'].includes(user.role));
+  const author = store.users.find((user) => user.id === req.params.id && ['author', 'admin'].includes(user.role) && user.status === 'active');
   if (!author) return res.status(404).json({ message: 'Author not found.' });
   res.json({
     author: serializePublicUser(author),
@@ -388,7 +388,10 @@ router.get('/articles/:id/comments', (req, res) => {
   if (!article) return res.status(404).json({ message: 'Article not found.' });
   const comments = store.comments
     .filter((item) => item.articleId === article.id && item.status === 'published')
-    .map((item) => ({ ...item, author: serializePublicUser(store.users.find((user) => user.id === item.authorId)) }));
+    .map((item) => ({
+      ...item,
+      author: serializePublicUser(store.users.find((user) => user.id === item.authorId && user.status !== 'deleted')),
+    }));
   res.json({ items: comments });
 });
 

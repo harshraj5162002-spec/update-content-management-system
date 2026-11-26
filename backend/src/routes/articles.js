@@ -48,9 +48,51 @@ function refreshArticleModeration(article) {
 }
 
 const articleDependentCollections = ['comments', 'bookmarks', 'readingHistory', 'freshnessAlerts', 'engagementEvents'];
+const MAX_ARTICLE_REVISIONS = 20;
+
+function getRevisionSnapshot(article) {
+  return {
+    title: article.title,
+    summary: article.summary || '',
+    content: article.content,
+    categoryIds: [...(article.categoryIds || [])],
+    tags: [...(article.tags || [])],
+    coverImage: article.coverImage || '',
+    quiz: article.quiz ? structuredClone(article.quiz) : null,
+  };
+}
+
+async function recordArticleRevision(article, source, restoredFromVersion) {
+  const revisions = store.articleRevisions
+    .filter((revision) => revision.articleId === article.id)
+    .sort((left, right) => left.version - right.version);
+  const snapshot = getRevisionSnapshot(article);
+  const latest = revisions[revisions.length - 1];
+  if (latest && JSON.stringify(getRevisionSnapshot(latest)) === JSON.stringify(snapshot)) return latest;
+
+  const revision = {
+    id: `revision-${crypto.randomUUID()}`,
+    articleId: article.id,
+    authorId: article.authorId,
+    version: (revisions[revisions.length - 1]?.version || 0) + 1,
+    ...snapshot,
+    source,
+    ...(restoredFromVersion ? { restoredFromVersion } : {}),
+    createdAt: new Date().toISOString(),
+  };
+  store.articleRevisions.push(revision);
+  await saveRecord('articleRevisions', revision);
+
+  while (revisions.length >= MAX_ARTICLE_REVISIONS) {
+    const oldest = revisions.shift();
+    store.articleRevisions = store.articleRevisions.filter((item) => item.id !== oldest.id);
+    await deleteRecord('articleRevisions', oldest.id);
+  }
+  return revision;
+}
 
 async function removeArticleDependents(articleId) {
-  for (const collection of articleDependentCollections) {
+  for (const collection of [...articleDependentCollections, 'articleRevisions']) {
     store[collection] = store[collection].filter((item) => item.articleId !== articleId);
     await deleteByArticleId(collection, articleId);
   }
@@ -132,6 +174,16 @@ router.get('/:id/analytics', requireAuth, (req, res) => {
     },
     authorStats: getAuthorStats(store.articles, article.authorId, since, store.engagementEvents),
   });
+});
+
+router.get('/:id/revisions', requireAuth, authorize('author', 'admin'), (req, res) => {
+  const article = store.articles.find((item) => item.id === req.params.id);
+  if (!article) return res.status(404).json({ message: 'Article not found.' });
+  if (!canViewPrivateArticle(req.user, article)) return res.status(403).json({ message: 'You are not allowed to view this article history.' });
+  const items = store.articleRevisions
+    .filter((revision) => revision.articleId === article.id)
+    .sort((left, right) => right.version - left.version);
+  res.json({ items });
 });
 
 router.get('/:id', (req, res) => {
@@ -300,8 +352,31 @@ router.post('/:id/submit', requireAuth, authorize('author', 'admin'), asyncHandl
   article.updatedAt = new Date().toISOString();
   article.review = { submittedAt: article.updatedAt };
   await saveRecord('articles', article);
+  await recordArticleRevision(article, 'submission');
   await recordAudit({ actorId: req.user.id, action: 'article.submit', targetType: 'article', targetId: article.id, reason: article.moderation.reasons.join('; '), outcome: article.status });
   res.json({ article, moderation: article.moderation });
+}));
+
+router.post('/:id/revisions/:revisionId/restore', requireAuth, authorize('author', 'admin'), asyncHandler(async (req, res) => {
+  const article = store.articles.find((item) => item.id === req.params.id);
+  if (!article) return res.status(404).json({ message: 'Article not found.' });
+  if (!canViewPrivateArticle(req.user, article)) return res.status(403).json({ message: 'You are not allowed to restore this article history.' });
+  const revision = store.articleRevisions.find((item) =>
+    item.id === req.params.revisionId && item.articleId === article.id
+  );
+  if (!revision) return res.status(404).json({ message: 'Article revision not found.' });
+
+  const restoredFromVersion = revision.version;
+  Object.assign(article, getRevisionSnapshot(revision));
+  article.updatedAt = new Date().toISOString();
+  article.review = { submittedAt: article.updatedAt, restoredFromVersion };
+  article.moderation = moderateContent(article, store.settings?.moderationThresholds);
+  article.status = article.moderation.status === 'quarantined' ? 'quarantined' : 'pending';
+  delete article.publishedAt;
+  await saveRecord('articles', article);
+  const restoredRevision = await recordArticleRevision(article, 'restore', restoredFromVersion);
+  await recordAudit({ actorId: req.user.id, action: 'article.revision.restore', targetType: 'article', targetId: article.id, outcome: `revision ${restoredFromVersion}` });
+  res.json({ article, revision: restoredRevision });
 }));
 
 router.put('/:id/autosave', requireAuth, authorize('author', 'admin'), [

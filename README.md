@@ -6,9 +6,9 @@ Signal CMS is an existing React and Express content-management application with 
 
 - Public discovery with full-text search, categories, tags, authors, trending stories, and related articles
 - Reader accounts, bookmarks, reading history and progress, comments, notifications, and recommendation feedback
-- Author drafts with cloud autosave for valid drafts and local recovery for incomplete work, mandatory administrator review before publishing, reviewer feedback and resubmission, freshness checks, and engagement analytics
+- Author drafts with cloud autosave for valid drafts and local recovery for incomplete work, mandatory administrator review before publishing, reviewer notifications and feedback, resubmission, up to 20 submitted revisions with restore-and-resubmit, freshness checks, and engagement analytics
 - Optional multiple-choice quizzes embedded in articles, with reader scoring
-- Admin moderation queue, comment review (approve, reject, remove), reports and appeals, user roles and restrictions, taxonomy, audit events, and settings
+- Admin moderation queue, comment review (approve, reject, remove), reports and appeals, user roles, restrictions and recoverable account deletion, taxonomy, audit events, and settings
 - JWT authentication, role-based authorization, rate limiting, and MongoDB persistence when configured
 - Optional Google and GitHub OAuth with one-time state, PKCE, and verified-email checks
 - Role-specific author, reader, and administrator analytics backed by recorded application data
@@ -146,7 +146,7 @@ All endpoints are under `/api`.
 - AI tools: `POST /ai/tools/:tool` (for example `summary`, `writing`, `moderation`, `quality`, or `related`; uses the configured provider)
 - Admin: moderation dashboard and queue, article decisions, comment review (`GET /moderation/comments`, `PATCH /moderation/comments/:id` with `approve`, `reject` or `remove`), reports, appeals, users, audit log, taxonomy, and settings
 
-Author submissions are never published by automated moderation. They remain pending (or quarantined for higher-risk review) until an administrator approves them. Administrators can approve, reject, request changes, or quarantine a submission; authors can see reviewer feedback and resubmit rejected or returned work. Since quizzes are embedded in articles, they are approved as part of the article and are not available until the article is published.
+Author submissions are never published by automated moderation. They remain pending (or quarantined for higher-risk review) until an administrator approves them. Administrators can approve, reject, request changes, or quarantine a submission; authors receive in-app notifications, can see reviewer feedback, and can resubmit rejected or returned work. Article editors retain up to 20 submitted revisions; restoring one sends it back through administrator review. Since quizzes are embedded in articles, they are approved as part of the article and are not available until the article is published. Administrators can schedule other accounts for deletion; the account and its articles are hidden immediately, can be restored for 30 days, and are permanently removed after the recovery period. Self-deletion and deletion of the last administrator are blocked.
 
 ## Validation
 

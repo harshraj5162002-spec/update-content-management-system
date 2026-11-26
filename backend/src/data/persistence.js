@@ -8,6 +8,7 @@ const demoOnlyCollections = new Set(['users', 'articles', 'comments', 'notificat
 const collectionModels = {
   users: models.User,
   articles: models.Article,
+  articleRevisions: models.ArticleRevision,
   categories: models.Category,
   comments: models.Comment,
   moderationResults: models.ModerationResult,
@@ -61,18 +62,23 @@ async function hydrateStore(store) {
   else await models.SystemSettings.create({ _id: 'cms-settings', value: store.settings });
 }
 
-async function saveRecord(collection, record) {
+async function saveRecord(collection, record, { unsetFields = [] } = {}) {
   if (!databaseEnabled) return;
 
   const Model = collectionModels[collection];
   if (!Model) throw new Error(`Unknown persistence collection: ${collection}`);
 
-  await Model.findByIdAndUpdate(
-    record.id,
-    { $set: (() => {
+  const update = {
+    $set: (() => {
       const { id, _id, ...fields } = record;
       return fields;
-    })() },
+    })(),
+  };
+  if (unsetFields.length) update.$unset = Object.fromEntries(unsetFields.map((field) => [field, 1]));
+
+  await Model.findByIdAndUpdate(
+    record.id,
+    update,
     { upsert: true, runValidators: true, setDefaultsOnInsert: true }
   );
 }
@@ -144,6 +150,15 @@ async function deleteByArticleId(collection, articleId) {
   await Model.deleteMany({ articleId });
 }
 
+async function deleteByField(collection, field, value, conditions = {}) {
+  if (!databaseEnabled) return;
+
+  const Model = collectionModels[collection];
+  if (!Model) throw new Error(`Unknown persistence collection: ${collection}`);
+
+  await Model.deleteMany({ ...conditions, [field]: value });
+}
+
 async function saveSettings(settings) {
   if (!databaseEnabled) return;
   await models.SystemSettings.findByIdAndUpdate(
@@ -153,4 +168,4 @@ async function saveSettings(settings) {
   );
 }
 
-module.exports = { hydrateStore, saveRecord, consumePasswordResetToken, clearPasswordResetToken, deleteRecord, deleteByArticleId, saveSettings };
+module.exports = { hydrateStore, saveRecord, consumePasswordResetToken, clearPasswordResetToken, deleteRecord, deleteByArticleId, deleteByField, saveSettings };

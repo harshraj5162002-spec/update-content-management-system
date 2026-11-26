@@ -5,6 +5,7 @@ const { requireAuth, authorize } = require('../middleware/auth');
 const { asyncHandler } = require('../middleware/asyncHandler');
 const { store } = require('../data/store');
 const { saveRecord, saveSettings } = require('../data/persistence');
+const { purgeExpiredAccounts } = require('../services/accountDeletion');
 const { moderateContent, detectTopics, DEFAULT_MODERATION_THRESHOLDS } = require('../services/aiService');
 const { recordAudit } = require('../services/audit');
 const { adjustReputation } = require('../services/trust');
@@ -120,6 +121,8 @@ router.get('/users', (req, res) => {
     status: user.status,
     reputation: user.reputation,
     restrictedUntil: user.restrictedUntil,
+    deletedAt: user.deletedAt,
+    deletionExpiresAt: user.deletionExpiresAt,
     isCurrentUser: user.id === req.user.id,
   }));
   res.json({ items });
@@ -133,11 +136,84 @@ router.patch('/users/:id/role', [
   if (req.params.id === req.user.id) return res.status(409).json({ message: 'You cannot change your own role.' });
   const user = store.users.find((item) => item.id === req.params.id);
   if (!user) return res.status(404).json({ message: 'User not found.' });
+  if (user.status === 'deleted') return res.status(409).json({ message: 'Restore the account before changing its role.' });
   const previousRole = user.role;
   user.role = req.body.role;
   await saveRecord('users', user);
   await recordAudit({ actorId: req.user.id, action: 'user.role.update', targetType: 'user', targetId: user.id, reason: `Role changed from ${previousRole} to ${user.role}`, outcome: user.role });
   res.json({ user: { id: user.id, name: user.name, role: user.role } });
+}));
+
+router.delete('/users/:id', asyncHandler(async (req, res) => {
+  const user = store.users.find((item) => item.id === req.params.id);
+  if (!user) return res.status(404).json({ message: 'User not found.' });
+  if (user.id === req.user.id) return res.status(409).json({ message: 'You cannot delete your own administrator account.' });
+  if (user.status !== 'deleted' && user.role === 'admin' && store.users.filter((item) => item.role === 'admin' && item.status !== 'deleted').length <= 1) {
+    return res.status(409).json({ message: 'The last administrator account cannot be deleted.' });
+  }
+
+  const now = new Date();
+  if (user.status !== 'deleted') {
+    user.deletedPreviousStatus = user.status;
+    user.status = 'deleted';
+    user.deletedAt = now.toISOString();
+    user.deletionExpiresAt = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString();
+    user.deletedBy = req.user.id;
+    await saveRecord('users', user);
+    await recordAudit({ actorId: req.user.id, action: 'user.delete.schedule', targetType: 'user', targetId: user.id, outcome: user.deletionExpiresAt });
+  }
+
+  for (const article of store.articles.filter((item) => item.authorId === user.id)) {
+    if (!Object.hasOwn(article, 'accountDeletionPreviousStatus')) {
+      article.accountDeletionPreviousStatus = article.status;
+    }
+    article.status = 'archived';
+    article.updatedAt = now.toISOString();
+    await saveRecord('articles', article);
+  }
+
+  res.status(202).json({
+    message: 'Account scheduled for deletion. It can be restored within 30 days.',
+    deletionExpiresAt: user.deletionExpiresAt,
+  });
+}));
+
+router.post('/users/:id/restore', asyncHandler(async (req, res) => {
+  const user = store.users.find((item) => item.id === req.params.id);
+  if (!user) return res.status(404).json({ message: 'User not found.' });
+  if (user.status !== 'deleted') return res.status(409).json({ message: 'This account is not awaiting deletion.' });
+  if (new Date(user.deletionExpiresAt).getTime() <= Date.now()) {
+    await purgeExpiredAccounts();
+    return res.status(410).json({ message: 'The account recovery period has expired.' });
+  }
+
+  const now = new Date().toISOString();
+  for (const article of store.articles.filter((item) => item.authorId === user.id)) {
+    if (article.accountDeletionPreviousStatus) {
+      article.status = article.accountDeletionPreviousStatus;
+      delete article.accountDeletionPreviousStatus;
+      article.updatedAt = now;
+      await saveRecord('articles', article, { unsetFields: ['accountDeletionPreviousStatus'] });
+    }
+  }
+
+  const previousStatus = user.deletedPreviousStatus;
+  user.status = previousStatus === 'restricted' && user.restrictedUntil && new Date(user.restrictedUntil).getTime() > Date.now()
+    ? 'restricted'
+    : 'active';
+  delete user.deletedPreviousStatus;
+  delete user.deletedAt;
+  delete user.deletionExpiresAt;
+  delete user.deletedBy;
+  if (user.status === 'active') {
+    delete user.restrictedUntil;
+    delete user.restrictionReason;
+  }
+  const unsetFields = ['deletedPreviousStatus', 'deletedAt', 'deletionExpiresAt', 'deletedBy'];
+  if (user.status === 'active') unsetFields.push('restrictedUntil', 'restrictionReason');
+  await saveRecord('users', user, { unsetFields });
+  await recordAudit({ actorId: req.user.id, action: 'user.delete.restore', targetType: 'user', targetId: user.id, outcome: 'restored' });
+  res.json({ message: 'Account restored.', user: { id: user.id, status: user.status } });
 }));
 
 router.post('/users/:id/reputation', [
@@ -148,6 +224,7 @@ router.post('/users/:id/reputation', [
   if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
   const user = store.users.find((item) => item.id === req.params.id);
   if (!user) return res.status(404).json({ message: 'User not found.' });
+  if (user.status === 'deleted') return res.status(409).json({ message: 'Restore the account before changing its reputation.' });
   const result = await adjustReputation({ user, actorId: req.user.id, reason: req.body.reason, delta: Number(req.body.delta) });
   if (result.duplicate) return res.status(409).json({ message: 'This reputation event has already been recorded.' });
   await recordAudit({ actorId: req.user.id, action: 'reputation.adjust', targetType: 'user', targetId: user.id, reason: req.body.reason, outcome: `${result.event.delta}` });
@@ -444,6 +521,7 @@ router.put('/users/:id/restriction', [
   if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
   const user = store.users.find((item) => item.id === req.params.id);
   if (!user) return res.status(404).json({ message: 'User not found.' });
+  if (user.status === 'deleted') return res.status(409).json({ message: 'Restore the account before restricting it.' });
   if (user.role === 'admin') return res.status(409).json({ message: 'Administrator accounts cannot be restricted here.' });
 
   const durationHours = Number(req.body.durationHours) || 24;
@@ -458,6 +536,7 @@ router.put('/users/:id/restriction', [
 router.delete('/users/:id/restriction', asyncHandler(async (req, res) => {
   const user = store.users.find((item) => item.id === req.params.id);
   if (!user) return res.status(404).json({ message: 'User not found.' });
+  if (user.status === 'deleted') return res.status(409).json({ message: 'Restore the account before changing its restriction.' });
   user.status = 'active';
   delete user.restrictedUntil;
   delete user.restrictionReason;

@@ -15,6 +15,7 @@ const communityRoutes = require('./routes/community');
 const { optionalAuth } = require('./middleware/auth');
 const { getTrendingArticles, getRecommendationsForUser, getTopicSnapshot } = require('./services/analytics');
 const { serializePublicArticle } = require('./services/articleSerialization');
+const { purgeExpiredAccounts } = require('./services/accountDeletion');
 
 const app = express();
 
@@ -79,6 +80,11 @@ app.use((error, req, res, next) => {
 async function start() {
   const connected = await connectDb();
   if (connected) await hydrateStore(store);
+  await purgeExpiredAccounts();
+  const accountCleanupTimer = setInterval(() => {
+    purgeExpiredAccounts().catch((error) => console.error('Expired account cleanup failed:', error));
+  }, 60 * 60 * 1000);
+  accountCleanupTimer.unref();
   const server = app.listen(port, () => {
     console.log(`Signal CMS API running on port ${port}`);
   });

@@ -288,43 +288,48 @@ function App() {
           </div>
         </header>
 
-        <Routes>
-          <Route path="/" element={!token || user?.role === 'admin' ? <AdminDashboardPage user={user} /> : <HomePage user={user} />} />
-          <Route path="/auth" element={<AuthPage onLogin={handleLogin} />} />
-          <Route path="/forgot-password" element={<ForgotPasswordPage />} />
-          <Route path="/reset-password" element={<ResetPasswordPage />} />
-          <Route path="/article/:id" element={<ArticlePage token={token} />} />
-          <Route path="/for-you" element={<ArticleCollectionPage title="For you" endpoint="/recommendations" authenticated />} />
-          <Route path="/trending" element={<ArticleCollectionPage title="Trending now" endpoint="/trending" />} />
-          <Route path="/explore" element={<SearchPage />} />
-          <Route path="/search" element={<SearchPage key={location.search} />} />
-          <Route path="/categories" element={<CategoriesPage />} />
-          <Route path="/categories/:id" element={<SearchPage key={location.pathname} />} />
-          <Route path="/authors" element={<AuthorsPage />} />
-          <Route path="/authors/:id" element={<AuthorProfilePage />} />
-          <Route path="/saved" element={<ArticleCollectionPage title="Saved articles" endpoint="/me/bookmarks" authenticated />} />
-          <Route path="/history" element={<ArticleCollectionPage title="Reading history" endpoint="/me/history" authenticated />} />
-          <Route path="/reader/analytics" element={<ReaderAnalyticsPage user={user} />} />
-          <Route path="/notifications" element={<NotificationsPage />} />
-          <Route path="/settings" element={<SettingsPage user={user} />} />
-          <Route path="/author" element={<AuthorDashboardPage user={user} />} />
-          <Route path="/author/articles" element={<AuthorArticlesPage user={user} />} />
-          <Route path="/author/new" element={<ArticleEditorPage key={`${location.pathname}:${user?.id || 'loading'}`} user={user} token={token} />} />
-          <Route path="/author/edit/:id" element={<ArticleEditorPage key={`${location.pathname}:${user?.id || 'loading'}`} user={user} token={token} />} />
-          <Route path="/author/analytics" element={<AuthorAnalyticsPage user={user} />} />
-          <Route path="/author/freshness" element={<FreshnessPage />} />
-          <Route path="/ai-tools" element={<AIToolsPage />} />
-          <Route path="/admin" element={<AdminDashboardPage user={user} />} />
-          <Route path="/admin/review" element={<ReviewQueuePage />} />
-          <Route path="/admin/articles" element={<AdminArticlesPage />} />
-          <Route path="/admin/users" element={<AdminUsersPage />} />
-          <Route path="/admin/categories" element={<AdminTaxonomyPage />} />
-          <Route path="/admin/reports" element={<AdminReportsPage />} />
-          <Route path="/admin/abuse" element={<AdminAbusePage />} />
-          <Route path="/admin/audit" element={<AuditPage />} />
-          <Route path="/admin/settings" element={<AdminSettingsPage />} />
-          <Route path="*" element={<NotFoundPage />} />
-        </Routes>
+        <div className="workspace-grid">
+          <div className="workspace-route">
+            <Routes>
+              <Route path="/" element={!token || user?.role === 'admin' ? <AdminDashboardPage user={user} /> : <HomePage user={user} />} />
+              <Route path="/auth" element={<AuthPage onLogin={handleLogin} />} />
+              <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+              <Route path="/reset-password" element={<ResetPasswordPage />} />
+              <Route path="/article/:id" element={<ArticlePage token={token} />} />
+              <Route path="/for-you" element={<ArticleCollectionPage title="For you" endpoint="/recommendations" authenticated />} />
+              <Route path="/trending" element={<ArticleCollectionPage title="Trending now" endpoint="/trending" />} />
+              <Route path="/explore" element={<SearchPage />} />
+              <Route path="/search" element={<SearchPage key={location.search} />} />
+              <Route path="/categories" element={<CategoriesPage />} />
+              <Route path="/categories/:id" element={<SearchPage key={location.pathname} />} />
+              <Route path="/authors" element={<AuthorsPage />} />
+              <Route path="/authors/:id" element={<AuthorProfilePage />} />
+              <Route path="/saved" element={<ArticleCollectionPage title="Saved articles" endpoint="/me/bookmarks" authenticated />} />
+              <Route path="/history" element={<ArticleCollectionPage title="Reading history" endpoint="/me/history" authenticated />} />
+              <Route path="/reader/analytics" element={<ReaderAnalyticsPage user={user} />} />
+              <Route path="/notifications" element={<NotificationsPage />} />
+              <Route path="/settings" element={<SettingsPage user={user} />} />
+              <Route path="/author" element={<AuthorDashboardPage user={user} />} />
+              <Route path="/author/articles" element={<AuthorArticlesPage user={user} />} />
+              <Route path="/author/new" element={<ArticleEditorPage key={`${location.pathname}:${user?.id || 'loading'}`} user={user} token={token} />} />
+              <Route path="/author/edit/:id" element={<ArticleEditorPage key={`${location.pathname}:${user?.id || 'loading'}`} user={user} token={token} />} />
+              <Route path="/author/analytics" element={<AuthorAnalyticsPage user={user} />} />
+              <Route path="/author/freshness" element={<FreshnessPage />} />
+              <Route path="/ai-tools" element={<AIToolsPage />} />
+              <Route path="/admin" element={<AdminDashboardPage user={user} />} />
+              <Route path="/admin/review" element={<ReviewQueuePage />} />
+              <Route path="/admin/articles" element={<AdminArticlesPage />} />
+              <Route path="/admin/users" element={<AdminUsersPage />} />
+              <Route path="/admin/categories" element={<AdminTaxonomyPage />} />
+              <Route path="/admin/reports" element={<AdminReportsPage />} />
+              <Route path="/admin/abuse" element={<AdminAbusePage />} />
+              <Route path="/admin/audit" element={<AuditPage />} />
+              <Route path="/admin/settings" element={<AdminSettingsPage />} />
+              <Route path="*" element={<NotFoundPage />} />
+            </Routes>
+          </div>
+          {!isAuthPage && <WorkspaceRail user={user} />}
+        </div>
       </div>
     </div>
   );
@@ -333,6 +338,69 @@ function App() {
 function SidebarLink({ item, onNavigate }) {
   const Icon = item.icon;
   return <NavLink to={item.to} end={item.to === '/' || item.to === '/admin'} onClick={onNavigate} className={({ isActive }) => `sidebar-link${isActive ? ' active' : ''}`}><Icon size={17} /><span>{item.label}</span></NavLink>;
+}
+
+function WorkspaceRail({ user }) {
+  const isAdmin = !user || user.role === 'admin';
+  const isAuthor = user?.role === 'author';
+  const quickLinks = isAdmin
+    ? [
+      { to: '/admin/review', label: 'Review submissions', icon: ShieldCheck },
+      { to: '/admin/articles', label: 'Manage posts', icon: FileText },
+      { to: '/admin/reports', label: 'Community reports', icon: MessageSquare },
+    ]
+    : isAuthor
+      ? [
+        { to: '/author/new', label: 'Write an article', icon: PenLine },
+        { to: '/author/articles', label: 'My articles', icon: FileText },
+        { to: '/author/analytics', label: 'Performance', icon: TrendingUp },
+      ]
+      : [
+        { to: '/trending', label: 'Trending stories', icon: TrendingUp },
+        { to: '/categories', label: 'Browse topics', icon: Tags },
+        { to: '/authors', label: 'Meet the authors', icon: Users },
+      ];
+  const checklist = isAdmin
+    ? ['Review drafts before publishing', 'Keep reports documented', 'Use consistent categories']
+    : isAuthor
+      ? ['Use a clear headline', 'Add a useful summary', 'Check sources and links']
+      : ['Follow topics you enjoy', 'Save stories for later', 'Discover new writers'];
+
+  return (
+    <aside className="workspace-rail" aria-label="Workspace shortcuts and guidance">
+      <section className="rail-card">
+        <div className="rail-card-heading">
+          <h2>{isAdmin ? 'Workspace shortcuts' : isAuthor ? 'Writing desk' : 'Explore Signal'}</h2>
+          <span className="rail-indicator" aria-hidden="true" />
+        </div>
+        <nav className="rail-link-list" aria-label="Quick links">
+          {quickLinks.map(({ to, label, icon: Icon }) => (
+            <Link className="rail-link" to={to} key={to}>
+              <span className="rail-link-icon"><Icon size={16} /></span>
+              <span>{label}</span>
+              <span className="rail-arrow" aria-hidden="true">→</span>
+            </Link>
+          ))}
+        </nav>
+      </section>
+
+      <section className="rail-card rail-feature">
+        <span className="rail-eyebrow"><Sparkles size={14} /> EDITORIAL NOTE</span>
+        <h2>{isAdmin ? 'Trust is built in the details.' : isAuthor ? 'Good stories earn attention.' : 'Make room for good ideas.'}</h2>
+        <p>{isAdmin ? 'Clear review notes and consistent decisions help every contributor understand what comes next.' : isAuthor ? 'Strong structure, reliable sources, and a thoughtful summary help readers stay with your story.' : 'Explore a different perspective, follow a topic, or save a story to revisit.'}</p>
+        <Link to={isAdmin ? '/admin/audit' : isAuthor ? '/author/analytics' : '/explore'} className="rail-feature-link">
+          {isAdmin ? 'View audit history' : isAuthor ? 'View performance' : 'Explore stories'} <span aria-hidden="true">→</span>
+        </Link>
+      </section>
+
+      <section className="rail-card rail-checklist">
+        <div className="rail-card-heading"><h2>{isAdmin ? 'Editorial standards' : 'A quick checklist'}</h2></div>
+        <ul>
+          {checklist.map((item) => <li key={item}><CheckCircle2 size={15} />{item}</li>)}
+        </ul>
+      </section>
+    </aside>
+  );
 }
 
 function HomePage({ user }) {

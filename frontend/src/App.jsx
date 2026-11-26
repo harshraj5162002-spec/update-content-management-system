@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { Link, NavLink, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
-import { Activity, BarChart3, Bell, BookOpen, Bookmark, CheckCircle2, Clock3, Compass, Eye, EyeOff, FileText, Heart, History, LayoutDashboard, LogIn, LogOut, Menu, PenLine, Search, Settings, ShieldCheck, Sparkles, Tags, TrendingUp, Users, WandSparkles, X } from 'lucide-react';
+import { Activity, AlertTriangle, BarChart3, Bell, BookOpen, Bookmark, CheckCircle2, Clock3, Compass, Eye, EyeOff, FileText, Heart, History, LayoutDashboard, LogIn, LogOut, Menu, MessageSquare, PenLine, Search, Settings, ShieldCheck, Sparkles, Tags, TrendingUp, Users, WandSparkles, X } from 'lucide-react';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api';
 const DEMO_ADMIN_EMAIL = import.meta.env.DEV ? import.meta.env.VITE_DEMO_ADMIN_EMAIL?.trim() || '' : '';
@@ -185,7 +185,7 @@ function App() {
   }
 
   const isAuthPage = ['/auth', '/forgot-password', '/reset-password'].includes(location.pathname);
-  const readerLinks = [
+  const readerLinks = user?.role === 'admin' || !token ? [] : [
     { to: '/', label: 'Home', icon: LayoutDashboard },
     ...(token ? [{ to: '/for-you', label: 'For you', icon: Sparkles }] : []),
     { to: '/trending', label: 'Trending', icon: TrendingUp },
@@ -198,17 +198,17 @@ function App() {
     { to: '/history', label: 'Reading history', icon: History },
     ] : []),
   ];
-  const workspaceLinks = user?.role === 'admin'
+  const workspaceLinks = user?.role === 'admin' || !token
     ? [
-      { to: '/admin', label: 'Admin overview', icon: ShieldCheck },
-      { to: '/admin/review', label: 'Review queue', icon: CheckCircle2 },
-      { to: '/admin/articles', label: 'Article management', icon: FileText },
-      { to: '/admin/users', label: 'User management', icon: Users },
-      { to: '/admin/categories', label: 'Categories & tags', icon: Tags },
-      { to: '/admin/reports', label: 'Reports & appeals', icon: Bell },
-      { to: '/admin/abuse', label: 'Spam & abuse', icon: ShieldCheck },
-      { to: '/admin/audit', label: 'Audit history', icon: Activity },
-      { to: '/admin/settings', label: 'System settings', icon: Settings },
+      { to: '/admin', label: 'Dashboard', icon: LayoutDashboard },
+      { to: '/admin/articles', label: 'Posts', icon: FileText },
+      { to: '/admin/categories', label: 'Categories', icon: Tags },
+      { to: '/admin/users', label: 'Users', icon: Users },
+      { to: '/admin/reports', label: 'Reports & comments', icon: MessageSquare },
+      { to: '/admin/review', label: 'Review queue', icon: ShieldCheck },
+      { to: '/admin/abuse', label: 'Abuse signals', icon: AlertTriangle },
+      { to: '/admin/audit', label: 'Audit history', icon: History },
+      { to: '/admin/settings', label: 'Settings', icon: Settings },
     ]
     : ['author', 'admin'].includes(user?.role)
       ? [
@@ -219,13 +219,15 @@ function App() {
         { to: '/author/freshness', label: 'Freshness alerts', icon: Clock3 },
       ]
       : [];
-  const utilityLinks = [
+  const utilityLinks = user?.role === 'admin' || !token ? [] : [
     { to: '/ai-tools', label: 'AI tools', icon: WandSparkles },
     ...(token ? [
       { to: '/notifications', label: 'Notifications', icon: Bell },
       { to: '/settings', label: 'Settings', icon: Settings },
     ] : []),
   ];
+  const isAdminDashboard = user?.role === 'admin' && ['/', '/admin'].includes(location.pathname);
+  const profileName = isAdminDashboard ? 'Admin' : user?.name || 'Account';
 
   return (
     <div className={`app-shell${isAuthPage ? ' auth-shell' : ''}`}>
@@ -236,10 +238,9 @@ function App() {
             <div><div className="brand-name">Signal CMS</div><div className="brand-subtitle">Editorial intelligence</div></div>
           </Link>
           <nav className="sidebar-nav" aria-label="Workspace navigation">
-            <span className="nav-section-label">DISCOVER</span>
-            {readerLinks.map((item) => <SidebarLink key={item.to} item={item} onNavigate={() => setMobileMenuOpen(false)} />)}
-            {workspaceLinks.length > 0 && <><span className="nav-section-label">WORKSPACE</span>{workspaceLinks.map((item) => <SidebarLink key={item.to} item={item} onNavigate={() => setMobileMenuOpen(false)} />)}</>}
-            <span className="nav-section-label">TOOLS</span>
+            {readerLinks.length > 0 && <><span className="nav-section-label">DISCOVER</span>{readerLinks.map((item) => <SidebarLink key={item.to} item={item} onNavigate={() => setMobileMenuOpen(false)} />)}</>}
+            {workspaceLinks.length > 0 && <>{user?.role !== 'admin' && token && <span className="nav-section-label">WORKSPACE</span>}{workspaceLinks.map((item) => <SidebarLink key={`${item.to}-${item.label}`} item={item} onNavigate={() => setMobileMenuOpen(false)} />)}</>}
+            {utilityLinks.length > 0 && <span className="nav-section-label">TOOLS</span>}
             {utilityLinks.map((item) => <SidebarLink key={item.to} item={item} onNavigate={() => setMobileMenuOpen(false)} />)}
           </nav>
           <div className="sidebar-promo">
@@ -268,11 +269,19 @@ function App() {
             {token ? (
               <div className="profile-menu">
                 <Link to="/settings" className="profile-chip">
-                  <span className="avatar-circle">{(user?.name || 'U').slice(0, 1).toUpperCase()}</span>
-                  <span className="profile-identity"><strong>{user?.name || 'Account'}</strong><small>{user?.role || 'Member'}</small></span>
+                  <span className="avatar-circle">{(isAdminDashboard ? 'A' : user?.name || 'U').slice(0, 1).toUpperCase()}</span>
+                  <span className="profile-identity"><strong>{profileName}</strong><small>{user?.role || 'Member'}</small></span>
                 </Link>
                 <button type="button" className="ghost-button logout-button" onClick={handleLogout} aria-label="Logout"><LogOut size={16} /></button>
               </div>
+            ) : ['/', '/admin'].includes(location.pathname) || location.pathname.startsWith('/admin/') ? (
+              <>
+                <Link to="/notifications" className="ghost-button notification-link" aria-label="Notifications"><Bell size={17} /><span className="notification-count">3</span></Link>
+                <Link to="/auth" className="profile-chip dashboard-profile-chip" aria-label="Open account">
+                  <span className="avatar-circle"><ShieldCheck size={16} /></span>
+                  <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 4l4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                </Link>
+              </>
             ) : (
               <Link to="/auth" className="primary-button"><LogIn size={16} />Login</Link>
             )}
@@ -280,7 +289,7 @@ function App() {
         </header>
 
         <Routes>
-          <Route path="/" element={<HomePage user={user} />} />
+          <Route path="/" element={!token || user?.role === 'admin' ? <AdminDashboardPage user={user} /> : <HomePage user={user} />} />
           <Route path="/auth" element={<AuthPage onLogin={handleLogin} />} />
           <Route path="/forgot-password" element={<ForgotPasswordPage />} />
           <Route path="/reset-password" element={<ResetPasswordPage />} />
@@ -305,7 +314,7 @@ function App() {
           <Route path="/author/analytics" element={<AuthorAnalyticsPage user={user} />} />
           <Route path="/author/freshness" element={<FreshnessPage />} />
           <Route path="/ai-tools" element={<AIToolsPage />} />
-          <Route path="/admin" element={<AdminDashboardPage />} />
+          <Route path="/admin" element={<AdminDashboardPage user={user} />} />
           <Route path="/admin/review" element={<ReviewQueuePage />} />
           <Route path="/admin/articles" element={<AdminArticlesPage />} />
           <Route path="/admin/users" element={<AdminUsersPage />} />
@@ -323,7 +332,7 @@ function App() {
 
 function SidebarLink({ item, onNavigate }) {
   const Icon = item.icon;
-  return <NavLink to={item.to} end={item.to === '/'} onClick={onNavigate} className={({ isActive }) => `sidebar-link${isActive ? ' active' : ''}`}><Icon size={17} /><span>{item.label}</span></NavLink>;
+  return <NavLink to={item.to} end={item.to === '/' || item.to === '/admin'} onClick={onNavigate} className={({ isActive }) => `sidebar-link${isActive ? ' active' : ''}`}><Icon size={17} /><span>{item.label}</span></NavLink>;
 }
 
 function HomePage({ user }) {
@@ -863,6 +872,24 @@ function AuthPage({ onLogin }) {
     }
   }
 
+  async function loginAsDemoAdmin() {
+    if (!import.meta.env.DEV || !HAS_DEMO_ADMIN_CREDENTIALS) return;
+    setLoading(true);
+    setError('');
+    try {
+      const payload = await apiRequest('/auth/login', {
+        method: 'POST',
+        body: JSON.stringify({ email: DEMO_ADMIN_EMAIL, password: DEMO_ADMIN_PASSWORD, role: 'admin' }),
+      });
+      onLogin(payload.token);
+      navigate('/admin');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
   function startOAuth(provider) {
     window.location.assign(`${API_BASE}/auth/oauth/${provider}?role=${encodeURIComponent(form.role)}`);
   }
@@ -951,6 +978,7 @@ function AuthPage({ onLogin }) {
             <div className="muted-copy">
               <span>Local development demo account: {DEMO_ADMIN_EMAIL}</span>
               <button type="button" className="text-link" onClick={() => setForm((current) => ({ ...current, email: DEMO_ADMIN_EMAIL, password: DEMO_ADMIN_PASSWORD }))}>Fill demo credentials</button>
+              <button type="button" className="secondary-button" disabled={loading} onClick={loginAsDemoAdmin}>Login as demo Admin</button>
             </div>
           ) : (
             <p className="muted-copy">No local Admin demo credentials are configured. Use your existing Admin account or Forgot password if email recovery is configured. If no Admin account exists, ask the database owner to provision one securely; do not promote a regular user.</p>
@@ -1143,8 +1171,19 @@ function AuthorDashboardPage({ user }) {
   );
 }
 
-function AdminDashboardPage() {
-  const [moderation, setModeration] = useState(null);
+function AdminDashboardPage({ user }) {
+  const [moderation, setModeration] = useState(() => localStorage.getItem('cms-token') ? null : {
+    overview: { approved: 128, review: 0, blocked: 0, openReports: 1, openAppeals: 0, recentAbuse: 0 },
+    analytics: { timeline: [], hasUserHistory: false, hasModerationActivity: false, hasReportActivity: false, hasAppealActivity: false },
+    topics: [],
+  });
+  const [articles, setArticles] = useState(() => localStorage.getItem('cms-token') ? [] : [
+    { id: 'preview-1', title: 'Getting Started with React', summary: 'Learn the basics of React.js...', status: 'published', tags: ['Development'], analytics: { views: 12500 } },
+    { id: 'preview-2', title: 'The Future of AI', summary: 'Exploring new AI technologies...', status: 'published', tags: ['Technology'], analytics: { views: 8900 } },
+    { id: 'preview-3', title: 'Top 10 Travel Destinations', summary: 'Explore the most beautiful places...', status: 'draft', tags: ['Travel'], analytics: { views: 1200 } },
+    { id: 'preview-4', title: 'Healthy Eating Tips', summary: 'Simple tips for a healthier lifestyle...', status: 'published', tags: ['Lifestyle'], analytics: { views: 6700 } },
+    { id: 'preview-5', title: 'Best Games in 2025', summary: 'Top games you must play...', status: 'published', tags: ['Gaming'], analytics: { views: 9400 } },
+  ]);
   const [days, setDays] = useState('30');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -1152,13 +1191,30 @@ function AdminDashboardPage() {
   useEffect(() => {
     let cancelled = false;
     async function loadAdminData() {
+      if (!localStorage.getItem('cms-token')) {
+        setLoading(false);
+        setModeration({
+          overview: { approved: 128, review: 0, blocked: 0, openReports: 1, openAppeals: 0, recentAbuse: 0 },
+          analytics: { timeline: [], hasUserHistory: false, hasModerationActivity: false, hasReportActivity: false, hasAppealActivity: false },
+          topics: [],
+        });
+        return undefined;
+      }
       setLoading(true);
       setError('');
       try {
-        const data = await apiRequest(`/moderation/dashboard?days=${days}`);
-        if (!cancelled) setModeration(data);
+        const [data, articleData] = await Promise.all([
+          apiRequest(`/moderation/dashboard?days=${days}`),
+          apiRequest('/moderation/articles'),
+        ]);
+        if (!cancelled) {
+          setModeration(data);
+          setArticles(articleData.items || []);
+        }
       } catch (error) {
-        if (!cancelled) setError(error.message);
+        if (!cancelled) {
+          if (error.message !== 'Authentication required.') setError(error.message);
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -1170,68 +1226,114 @@ function AdminDashboardPage() {
 
   if (loading && !moderation) return <div className="page-panel">Loading moderation dashboard…</div>;
 
+  const approved = moderation?.overview?.approved || 0;
+  const openReports = moderation?.overview?.openReports || 0;
+  const totalUsers = (moderation?.analytics?.userRoles || []).reduce((sum, role) => sum + role.count, 0);
+  const totalComments = articles.reduce((sum, article) => sum + (article.comments || article.analytics?.comments || 0), 0);
+  const totalViews = articles.reduce((sum, article) => sum + (article.views || article.analytics?.views || 0), 0);
+  const topTopics = (moderation?.topics || []).slice(0, 5);
+  const recentArticles = articles.slice(0, 5);
+  const isPreview = !localStorage.getItem('cms-token');
+
   return (
-    <main className="page-content">
-      <PageHeading eyebrow="Trust & safety" title="Admin overview" description="Moderation decisions, community reports, appeals and abuse signals." action={<Link to="/admin/review" className="primary-button"><ShieldCheck size={16} />Review queue</Link>} />
+    <main className="page-content cms-dashboard">
+      <div className="dashboard-welcome">
+        <div>
+          <h1>Welcome to your dashboard <b aria-hidden="true">👋</b></h1>
+          <p>Here's what's happening with your content today.</p>
+        </div>
+        <Link to="/author/new" className="primary-button dashboard-create-button"><span aria-hidden="true">+</span>Create New Post</Link>
+      </div>
       {error && <div className="page-panel error-panel">{error}</div>}
-      <label className="sort-select">Analytics range<select value={days} onChange={(event) => setDays(event.target.value)}><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option></select></label>
-      <section className="section-card">
-        <div className="stats-grid">
-          <div className="stat-box"><span>Approved</span><strong>{moderation?.overview?.approved || 0}</strong></div>
-          <div className="stat-box"><span>Review</span><strong>{moderation?.overview?.review || 0}</strong></div>
-          <div className="stat-box"><span>Blocked</span><strong>{moderation?.overview?.blocked || 0}</strong></div>
-          <div className="stat-box"><span>Open reports</span><strong>{moderation?.overview?.openReports || 0}</strong></div>
-          <div className="stat-box"><span>Open appeals</span><strong>{moderation?.overview?.openAppeals || 0}</strong></div>
-          <div className="stat-box"><span>Abuse alerts ({days} days)</span><strong>{moderation?.overview?.recentAbuse || 0}</strong></div>
+      <section className="dashboard-metrics">
+        <div className="dashboard-metric metric-purple">
+          <div className="metric-icon"><FileText size={23} /></div>
+          <div className="metric-copy"><strong>{isPreview ? 128 : articles.length}</strong><span>Total Posts</span><small>{isPreview ? '↑ +12%' : `${articles.filter((article) => article.status === 'published').length} published`}</small></div>
+          <div className="metric-sparkline"><i /><i /><i /><i /><i /><i /><i /></div>
+        </div>
+        <div className="dashboard-metric metric-blue">
+          <div className="metric-icon"><Users size={23} /></div>
+          <div className="metric-copy"><strong>{isPreview ? '4.8K' : totalUsers.toLocaleString()}</strong><span>Total Users</span><small>{isPreview ? '↑ +8%' : 'registered accounts'}</small></div>
+          <div className="metric-sparkline"><i /><i /><i /><i /><i /><i /><i /></div>
+        </div>
+        <div className="dashboard-metric metric-green">
+          <div className="metric-icon"><MessageSquare size={23} /></div>
+          <div className="metric-copy"><strong>{isPreview ? '2.1K' : totalComments.toLocaleString()}</strong><span>Comments</span><small>{isPreview ? '↑ +15%' : 'across all posts'}</small></div>
+          <div className="metric-sparkline"><i /><i /><i /><i /><i /><i /><i /></div>
+        </div>
+        <div className="dashboard-metric metric-orange">
+          <div className="metric-icon"><Eye size={23} /></div>
+          <div className="metric-copy"><strong>{isPreview ? '125K' : totalViews.toLocaleString()}</strong><span>Total Views</span><small>{isPreview ? '↑ +20%' : 'all-time article views'}</small></div>
+          <div className="metric-sparkline"><i /><i /><i /><i /><i /><i /><i /></div>
         </div>
       </section>
 
-      <section className="dashboard-two-up">
-        <div className="section-card">
-          <h2>Growth and community activity</h2>
-          <p className="muted-copy">Daily registrations, moderation actions, reports and appeals based on recorded events.</p>
+      <section className="dashboard-middle">
+        <div className="dashboard-card analytics-card">
+          <div className="dashboard-card-header">
+            <h2><BarChart3 size={20} />Analytics Overview</h2>
+            <div className="analytics-ranges">
+              {[['7','7D'],['30','30D'],['90','90D']].map(([value, label]) => <button type="button" key={value} className={days === value ? 'active' : ''} onClick={() => setDays(value)}>{label}</button>)}
+              <button type="button">1Y</button>
+            </div>
+          </div>
           <TrendChart
             data={moderation?.analytics?.timeline || []}
             lines={[
-              { key: 'users', name: 'New users', color: '#647b62' },
-              { key: 'moderation', name: 'Moderation', color: '#9c6a39' },
-              { key: 'reports', name: 'Reports', color: '#b45c53' },
-              { key: 'appeals', name: 'Appeals', color: '#6b759e' },
+              { key: 'users', name: 'Views', color: '#7761ed' },
+              { key: 'moderation', name: 'Moderation', color: '#7bc4a7' },
             ]}
-            empty={!moderation?.analytics?.hasUserHistory && !moderation?.analytics?.hasModerationActivity && !moderation?.analytics?.hasReportActivity && !moderation?.analytics?.hasAppealActivity}
-            emptyMessage="No user or moderation history is recorded for this period."
+            empty={!moderation?.analytics?.timeline?.length}
+            emptyMessage="No analytics activity is recorded for this period."
           />
         </div>
-        <div className="section-card">
-          <h2>Article statuses</h2>
-          <p className="muted-copy">Current distribution across all articles.</p>
-          <DistributionChart data={moderation?.analytics?.articleStatuses || []} nameKey="status" valueKey="count" />
-        </div>
-      </section>
-      <section className="dashboard-two-up">
-        <div className="section-card">
-          <h2>Reports by status</h2>
-          <DistributionChart data={moderation?.analytics?.reportsByStatus || []} nameKey="status" valueKey="count" />
-        </div>
-        <div className="section-card">
-          <h2>Appeals by status</h2>
-          <DistributionChart data={moderation?.analytics?.appealsByStatus || []} nameKey="status" valueKey="count" />
+        <div className="dashboard-card quick-actions-card">
+          <div className="dashboard-card-header"><h2><Activity size={20} />Quick Actions</h2><button type="button" className="icon-more" aria-label="More actions">•••</button></div>
+          <div className="quick-actions-grid">
+            <Link to="/author/new" className="quick-action purple-action"><PenLine size={21} /><span>Create Post</span></Link>
+            <Link to="/admin/users" className="quick-action blue-action"><Users size={21} /><span>Manage Users</span></Link>
+            <Link to="/admin/review" className="quick-action green-action"><BarChart3 size={21} /><span>View Analytics</span></Link>
+            <Link to="/admin/settings" className="quick-action orange-action"><Settings size={21} /><span>Settings</span></Link>
+          </div>
         </div>
       </section>
 
-      <section className="section-card">
-        <div className="section-header">
-          <div>
-            <span className="eyebrow">Measured trends</span>
-            <h2>Topics & risk signals</h2>
+      <section className="dashboard-bottom">
+        <div className="dashboard-card recent-posts-card">
+          <div className="dashboard-card-header"><h2><FileText size={20} />Recent Posts</h2><Link to="/admin/articles">View All <span>→</span></Link></div>
+          <div className="recent-posts-table">
+            <div className="recent-posts-head"><span>Title</span><span>Category</span><span>Status</span><span>Views</span><span>Actions</span></div>
+            {recentArticles.length ? recentArticles.map((article, index) => (
+              <div className="recent-post-row" key={article.id}>
+                <div className="recent-post-title">
+                  {article.coverImage ? <img src={article.coverImage} alt="" /> : <div className={`post-thumb thumb-${index % 4}`}><FileText size={18} /></div>}
+                  <div><strong>{article.title}</strong><small>{article.summary || 'No summary available'}</small></div>
+                </div>
+                <span className={`category-chip category-${index % 5}`}>{article.tags?.[0] || topTopics[index]?.name || 'General'}</span>
+                <span className={`status-chip ${article.status === 'published' ? 'published' : 'draft'}`}>{article.status || 'Draft'}</span>
+                <strong>{article.views || article.analytics?.views ? (article.views || article.analytics?.views).toLocaleString() : '—'}</strong>
+                <div className="post-actions"><Link to={`/article/${article.id}`} aria-label="Edit post"><PenLine size={17} /></Link><Link to={`/admin/articles`} aria-label="Delete post"><X size={17} /></Link></div>
+              </div>
+            )) : <div className="empty-state compact-empty">No recent posts available.</div>}
           </div>
         </div>
-        <div className="tag-grid">
-          {(moderation?.topics || []).map((topic) => (
-            <span key={topic.name} className="category-pill">{topic.name} · {topic.count}</span>
-          ))}
+
+        <div className="dashboard-card top-categories-card">
+          <div className="dashboard-card-header"><h2><Tags size={20} />Top Categories</h2><Link to="/admin/categories">View All <span>→</span></Link></div>
+          <div className="top-category-list">
+            {(topTopics.length ? topTopics : [
+              { name: 'Development', count: 38 },
+              { name: 'Technology', count: 34 },
+              { name: 'Travel', count: 28 },
+              { name: 'Lifestyle', count: 18 },
+              { name: 'Gaming', count: 10 },
+            ]).map((topic, index) => {
+              const width = Math.max(18, 92 - index * 13);
+              return <div className="top-category-row" key={topic.name}><span className={`category-symbol symbol-${index}`}><Tags size={16} /></span><strong>{topic.name}</strong><small>{topic.count} posts</small><div className="category-progress"><i style={{ width: `${width}%` }} /></div></div>;
+            })}
+          </div>
+          <Link to="/admin/categories" className="upgrade-card"><div className="upgrade-rocket">🚀</div><div><strong>Grow Your Content</strong><span>Reach more readers and build your audience.</span></div><span className="upgrade-button">Upgrade Now <b>→</b></span></Link>
         </div>
-        <p className="muted-copy">Risk scores prioritize review: low-risk submissions still require administrator approval, while higher-risk content may be quarantined for closer review.</p>
       </section>
     </main>
   );
@@ -1430,7 +1532,9 @@ function NotificationsPage() {
     try {
       await apiRequest(`/notifications/${id}/read`, { method: 'PATCH' });
       setItems((current) => current.map((item) => item.id === id ? { ...item, read: true } : item));
-    } catch (actionError) { setError(actionError.message); }
+    } catch (actionError) {
+      if (actionError.message !== 'Authentication required.') setError(actionError.message);
+    }
   }
   if (!localStorage.getItem('cms-token')) return <AccessNotice />;
   return <main className="page-content"><PageHeading eyebrow="Updates" title="Notifications" description="Moderation, freshness and account updates." />
@@ -1447,7 +1551,9 @@ function SettingsPage({ user }) {
     if (!localStorage.getItem('cms-token')) return;
     Promise.all([apiRequest('/me/profile'), apiRequest('/categories')])
       .then(([data, categoryData]) => { setProfile(data.user); setCategories(categoryData); })
-      .catch((loadError) => setError(loadError.message));
+      .catch((loadError) => {
+        if (loadError.message !== 'Authentication required.') setError(loadError.message);
+      });
   }, [user?.id]);
   if (!localStorage.getItem('cms-token')) return <AccessNotice />;
   if (!profile && !error) return <main className="page-panel">Loading account settings…</main>;
@@ -2020,11 +2126,28 @@ function AIToolsPage() {
 }
 
 function ReviewQueuePage() {
-  const [items, setItems] = useState([]);
+  const [items, setItems] = useState(() => localStorage.getItem('cms-token') ? [] : [
+    {
+      id: 'preview-review-1',
+      title: 'A Practical Guide to Responsible AI',
+      summary: 'How publishing teams can document AI-assisted work while preserving editorial accountability.',
+      content: 'This draft proposes a clear review workflow, source labeling, and human approval requirements for AI-assisted editorial content.',
+      status: 'pending',
+      moderation: { riskScore: 42, reasons: ['AI-assisted claims', 'External links'] },
+      quiz: { questions: [{ prompt: 'What is the primary goal of AI disclosure?', options: ['Increase traffic', 'Protect reader trust'], correctOptionIndex: 1 }] },
+    },
+  ]);
   const [error, setError] = useState('');
   const [busyId, setBusyId] = useState('');
   const [reason, setReason] = useState('');
-  const load = () => apiRequest('/moderation/queue').then((data) => setItems(data.items || [])).catch((loadError) => setError(loadError.message));
+  const load = () => {
+    if (!localStorage.getItem('cms-token')) return Promise.resolve();
+    return apiRequest('/moderation/queue')
+      .then((data) => setItems(data.items || []))
+      .catch((loadError) => {
+        if (loadError.message !== 'Authentication required.') setError(loadError.message);
+      });
+  };
   useEffect(() => { load(); }, []);
   async function decide(articleId, decision) {
     if (reason.trim().length < 3) {
@@ -2038,7 +2161,7 @@ function ReviewQueuePage() {
     } catch (actionError) { setError(actionError.message); }
     finally { setBusyId(''); }
   }
-  return <main className="page-content"><PageHeading eyebrow="Trust & safety" title="Moderation review queue" description="Review pending and quarantined submissions, including their article quizzes. Every decision is recorded in the audit history." />
+  return <main className="page-content admin-page"><PageHeading eyebrow="Trust & safety" title="Moderation review queue" description="Review pending and quarantined submissions, including their article quizzes. Every decision is recorded in the audit history." />
     <label className="editor-label">Decision reason<textarea value={reason} minLength={3} maxLength={1000} required onChange={(event) => setReason(event.target.value)} /></label>
     {error && <div className="page-panel error-panel">{error}</div>}
     {items.length ? <div className="review-list">{items.map((article) => <article className="section-card review-card" key={article.id}><div><span className="status-badge">{article.status}</span><h2>{article.title}</h2><p>{article.summary}</p><small>Risk {article.moderation?.riskScore ?? 0} · {article.moderation?.reasons?.join(', ')}</small><p className="muted-copy">{article.content}</p>{article.quiz?.questions?.map((question, index) => <div className="note-card" key={`${article.id}-quiz-${index}`}><strong>Quiz {index + 1}: {question.prompt}</strong><p>{question.options.map((option, optionIndex) => `${optionIndex + 1}. ${option}${optionIndex === question.correctOptionIndex ? ' (correct)' : ''}`).join(' · ')}</p></div>)}</div><div className="button-row"><button className="primary-button" disabled={busyId === article.id} onClick={() => decide(article.id, 'approve')}>Approve & publish</button><button className="secondary-button" disabled={busyId === article.id} onClick={() => decide(article.id, 'request_changes')}>Request changes</button><button className="secondary-button" disabled={busyId === article.id} onClick={() => decide(article.id, 'reject')}>Reject</button><button className="secondary-button" disabled={busyId === article.id} onClick={() => decide(article.id, 'quarantine')}>Quarantine</button></div></article>)}</div> : <div className="empty-state">The review queue is clear.</div>}
@@ -2046,12 +2169,20 @@ function ReviewQueuePage() {
 }
 
 function AdminReportsPage() {
-  const [reports, setReports] = useState([]);
-  const [appeals, setAppeals] = useState([]);
-  const [pendingComments, setPendingComments] = useState([]);
+  const [reports, setReports] = useState(() => localStorage.getItem('cms-token') ? [] : [
+    { id: 'preview-report-1', reason: 'Misleading headline', targetType: 'article', targetId: 'a-preview', status: 'open', details: 'The headline does not accurately reflect the article summary.' },
+    { id: 'preview-report-2', reason: 'Unwanted promotional content', targetType: 'comment', targetId: 'c-preview', status: 'open', details: 'Repeated self-promotion and external links.' },
+  ]);
+  const [appeals, setAppeals] = useState(() => localStorage.getItem('cms-token') ? [] : [
+    { id: 'preview-appeal-1', reason: 'I corrected the reported claim', articleId: 'a-preview', status: 'open', decision: 'The author requests a second editorial review.' },
+  ]);
+  const [pendingComments, setPendingComments] = useState(() => localStorage.getItem('cms-token') ? [] : [
+    { id: 'preview-comment-1', authorName: 'Nora Patel', articleTitle: 'Getting Started with React', body: 'This guide is useful, but the setup section needs one more example.', moderation: { reasons: ['Needs review'] } },
+  ]);
   const [tab, setTab] = useState('reports');
   const [error, setError] = useState('');
   const load = useCallback(async () => {
+    if (!localStorage.getItem('cms-token')) return;
     try {
       const [reportData, appealData, commentData] = await Promise.all([
         apiRequest('/moderation/reports'),
@@ -2061,9 +2192,12 @@ function AdminReportsPage() {
       setReports(reportData.items || []);
       setAppeals(appealData.items || []);
       setPendingComments(commentData.items || []);
-    } catch (loadError) { setError(loadError.message); }
+    } catch (loadError) {
+      if (loadError.message !== 'Authentication required.') setError(loadError.message);
+    }
   }, []);
   useEffect(() => {
+    if (!localStorage.getItem('cms-token')) return undefined;
     Promise.all([
       apiRequest('/moderation/reports'),
       apiRequest('/moderation/appeals'),
@@ -2091,7 +2225,7 @@ function AdminReportsPage() {
       await load();
     } catch (reviewError) { setError(reviewError.message); }
   }
-  return <main className="page-content"><PageHeading eyebrow="Trust & safety" title="Reports and appeals" description="Review community reports and moderation appeals." />
+  return <main className="page-content admin-page"><PageHeading eyebrow="Trust & safety" title="Reports and appeals" description="Review community reports and moderation appeals." />
     <div className="auth-toggle"><button className={tab === 'reports' ? 'active' : ''} onClick={() => setTab('reports')}>Reports ({reports.length})</button><button className={tab === 'appeals' ? 'active' : ''} onClick={() => setTab('appeals')}>Appeals ({appeals.length})</button><button className={tab === 'comments' ? 'active' : ''} onClick={() => setTab('comments')}>Comments ({pendingComments.length})</button></div>
     {error && <div className="page-panel error-panel">{error}</div>}
     {tab === 'comments' && (pendingComments.length ? <div className="notification-list">{pendingComments.map((comment) => <article className="notification-item" key={comment.id}><ShieldCheck size={18} /><div><strong>{comment.authorName} on “{comment.articleTitle}”</strong><small>{comment.body}</small><small>Flagged: {comment.moderation?.reasons?.join(', ') || 'Needs review'}</small></div><div className="button-row"><button className="primary-button" onClick={() => reviewComment(comment.id, 'approve')}>Approve</button><button className="secondary-button" onClick={() => reviewComment(comment.id, 'reject')}>Reject</button></div></article>)}</div> : <div className="empty-state">No comments are waiting for review.</div>)}
@@ -2100,15 +2234,24 @@ function AdminReportsPage() {
 }
 
 function AdminArticlesPage() {
-  const [items, setItems] = useState([]);
+  const [items, setItems] = useState(() => localStorage.getItem('cms-token') ? [] : [
+    { id: 'preview-1', title: 'Getting Started with React', authorId: 'Ava Moreno', status: 'published', moderation: { riskScore: 12 }, updatedAt: new Date(Date.now() - 86400000).toISOString() },
+    { id: 'preview-2', title: 'The Future of AI', authorId: 'Liam Chen', status: 'published', moderation: { riskScore: 18 }, updatedAt: new Date(Date.now() - 172800000).toISOString() },
+    { id: 'preview-3', title: 'Top 10 Travel Destinations', authorId: 'Ava Moreno', status: 'draft', moderation: { riskScore: 8 }, updatedAt: new Date(Date.now() - 259200000).toISOString() },
+    { id: 'preview-4', title: 'Healthy Eating Tips', authorId: 'Nora Patel', status: 'published', moderation: { riskScore: 10 }, updatedAt: new Date(Date.now() - 345600000).toISOString() },
+    { id: 'preview-5', title: 'Best Games in 2025', authorId: 'Liam Chen', status: 'published', moderation: { riskScore: 14 }, updatedAt: new Date(Date.now() - 432000000).toISOString() },
+  ]);
   const [status, setStatus] = useState('');
   const [error, setError] = useState('');
   useEffect(() => {
+    if (!localStorage.getItem('cms-token')) return undefined;
     apiRequest(`/moderation/articles${status ? `?status=${encodeURIComponent(status)}` : ''}`)
       .then((data) => setItems(data.items || []))
-      .catch((loadError) => setError(loadError.message));
+      .catch((loadError) => {
+        if (loadError.message !== 'Authentication required.') setError(loadError.message);
+      });
   }, [status]);
-  return <main className="page-content"><PageHeading eyebrow="Administration" title="Article management" description="Inspect all article states, including drafts, pending submissions and quarantined work." />
+  return <main className="page-content admin-page"><PageHeading eyebrow="Administration" title="Article management" description="Inspect all article states, including drafts, pending submissions and quarantined work." />
     <label className="sort-select">Status<select value={status} onChange={(event) => setStatus(event.target.value)}><option value="">All articles</option><option value="draft">Drafts</option><option value="pending">Pending</option><option value="changes_requested">Changes requested</option><option value="rejected">Rejected</option><option value="published">Published</option><option value="quarantined">Quarantined</option><option value="archived">Archived</option></select></label>
     {error && <div className="page-panel error-panel">{error}</div>}
     <div className="table-wrap section-card"><table><thead><tr><th>Title</th><th>Author</th><th>Status</th><th>Risk</th><th>Updated</th><th>Open</th></tr></thead><tbody>{items.map((article) => <tr key={article.id}><td>{article.title}</td><td>{article.authorId}</td><td>{article.status}</td><td>{article.moderation?.riskScore ?? '—'}</td><td>{new Date(article.updatedAt || article.createdAt).toLocaleDateString()}</td><td><Link className="text-link" to={article.status === 'published' ? `/article/${article.id}` : `/author/edit/${article.id}`}>View</Link></td></tr>)}</tbody></table>{!items.length && <p className="muted-copy">No matching articles.</p>}</div>
@@ -2116,20 +2259,28 @@ function AdminArticlesPage() {
 }
 
 function AdminUsersPage() {
-  const [users, setUsers] = useState([]);
+  const [users, setUsers] = useState(() => localStorage.getItem('cms-token') ? [] : [
+    { id: 'u-admin-preview', name: 'Demo Admin', email: 'admin@signalcms.dev', role: 'admin', status: 'active', reputation: 96, isCurrentUser: true },
+    { id: 'u-author-preview', name: 'Liam Chen', email: 'liam@signalcms.dev', role: 'author', status: 'active', reputation: 88 },
+    { id: 'u-reader-preview', name: 'Nora Patel', email: 'nora@signalcms.dev', role: 'reader', status: 'active', reputation: 81 },
+  ]);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const [adjustment, setAdjustment] = useState({ delta: 1, reason: '' });
   const load = useCallback(async () => {
+    if (!localStorage.getItem('cms-token')) return;
     try {
       const data = await apiRequest('/moderation/users');
       setUsers(data.items || []);
     } catch (loadError) { setError(loadError.message); }
   }, []);
   useEffect(() => {
+    if (!localStorage.getItem('cms-token')) return undefined;
     apiRequest('/moderation/users')
       .then((data) => setUsers(data.items || []))
-      .catch((loadError) => setError(loadError.message));
+      .catch((loadError) => {
+        if (loadError.message !== 'Authentication required.') setError(loadError.message);
+      });
   }, []);
 
   async function updateRole(userId, role) {
@@ -2162,7 +2313,7 @@ function AdminUsersPage() {
     } catch (actionError) { setError(actionError.message); }
   }
 
-  return <main className="page-content"><PageHeading eyebrow="Administration" title="User management" description="Manage roles, short-term restrictions, and audited reputation events." />
+  return <main className="page-content admin-page"><PageHeading eyebrow="Administration" title="User management" description="Manage roles, short-term restrictions, and audited reputation events." />
     {error && <div className="page-panel error-panel">{error}</div>}{message && <p className="success-message">{message}</p>}
     <section className="section-card editor-form"><h2>Reputation adjustment</h2><label>Score change<select value={adjustment.delta} onChange={(event) => setAdjustment({ ...adjustment, delta: event.target.value })}><option value="1">+1</option><option value="3">+3</option><option value="-1">−1</option><option value="-3">−3</option></select></label><label>Reason<input value={adjustment.reason} maxLength={500} onChange={(event) => setAdjustment({ ...adjustment, reason: event.target.value })} /></label><p className="muted-copy">Select a user below and click “Record event”; the same reason cannot be recorded twice for a user on the same day.</p></section>
     <div className="table-wrap section-card"><table><thead><tr><th>User</th><th>Email</th><th>Role</th><th>Status</th><th>Reputation</th><th>Actions</th></tr></thead><tbody>{users.map((user) => <tr key={user.id}><td>{user.name}</td><td>{user.email}</td><td><select aria-label={`Role for ${user.name}`} value={user.role} disabled={user.isCurrentUser} onChange={(event) => updateRole(user.id, event.target.value)}><option value="reader">Reader</option><option value="author">Author</option><option value="admin">Admin</option></select></td><td>{user.status}{user.restrictedUntil && <small> until {new Date(user.restrictedUntil).toLocaleString()}</small>}</td><td>{user.reputation ?? '—'}</td><td><div className="button-row">{user.status === 'restricted' ? <button className="secondary-button" onClick={() => clearRestriction(user)}>Lift restriction</button> : user.role !== 'admin' && <button className="secondary-button" onClick={() => setRestriction(user)}>Restrict 24h</button>}<button className="secondary-button" onClick={() => giveReputation(user.id)}>Record event</button></div></td></tr>)}</tbody></table></div>
@@ -2219,7 +2370,7 @@ function AdminTaxonomyPage() {
       await load();
     } catch (deleteError) { setError(deleteError.message); }
   }
-  return <main className="page-content"><PageHeading eyebrow="Administration" title="Categories & tags" description="Keep editorial taxonomy consistent across published content." />
+  return <main className="page-content admin-page"><PageHeading eyebrow="Administration" title="Categories & tags" description="Keep editorial taxonomy consistent across published content." />
     {error && <div className="page-panel error-panel">{error}</div>}{message && <p className="success-message">{message}</p>}
     <form className="section-card editor-form" onSubmit={createCategory}><h2>Create category</h2><label>Name<input required minLength={2} maxLength={80} value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></label><label>Description<textarea maxLength={500} value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} /></label><button type="submit" className="primary-button">Add category</button></form>
     <section className="section-card"><h2>Categories</h2><div className="notification-list">{categories.map((category) => <article className="notification-item" key={category.id}><Tags size={17} /><div><strong>{category.name}</strong><small>{category.articleCount} published articles · {category.description}</small></div><button className="secondary-button" onClick={() => deleteCategory(category)}>Delete</button></article>)}</div></section>
@@ -2231,7 +2382,7 @@ function AdminAbusePage() {
   const [items, setItems] = useState([]);
   const [error, setError] = useState('');
   useEffect(() => { apiRequest('/moderation/abuse').then((data) => setItems(data.items || [])).catch((loadError) => setError(loadError.message)); }, []);
-  return <main className="page-content"><PageHeading eyebrow="Trust & safety" title="Spam and abuse signals" description="Repeated posts and comments are logged for review. Automated signals do not permanently suspend accounts." />
+  return <main className="page-content admin-page"><PageHeading eyebrow="Trust & safety" title="Spam and abuse signals" description="Repeated posts and comments are logged for review. Automated signals do not permanently suspend accounts." />
     {error && <div className="page-panel error-panel">{error}</div>}
     {items.length ? <div className="notification-list">{items.map((item) => <article className="notification-item" key={item.id}><ShieldCheck size={18} /><div><strong>{item.type} · {item.severity}</strong><small>User {item.userId} · {new Date(item.createdAt).toLocaleString()}</small><small>{item.details}</small></div></article>)}</div> : <div className="empty-state">No suspicious activity has been recorded.</div>}
   </main>;
@@ -2242,17 +2393,27 @@ function AdminSettingsPage() {
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   useEffect(() => {
-    apiRequest('/moderation/dashboard').then((data) => setThresholds(data.thresholds || { autoApprove: 29, review: 69 })).catch((loadError) => setError(loadError.message));
+    if (!localStorage.getItem('cms-token')) return undefined;
+    apiRequest('/moderation/dashboard')
+      .then((data) => setThresholds(data.thresholds || { autoApprove: 29, review: 69 }))
+      .catch((loadError) => {
+        if (loadError.message !== 'Authentication required.') setError(loadError.message);
+      });
+    return undefined;
   }, []);
   async function save(event) {
     event.preventDefault();
     setError('');
+    if (!localStorage.getItem('cms-token')) {
+      setError('Sign in as an administrator to save settings.');
+      return;
+    }
     try {
       await apiRequest('/moderation/settings', { method: 'PUT', body: JSON.stringify({ moderationThresholds: { autoApprove: Number(thresholds.autoApprove), review: Number(thresholds.review) } }) });
       setMessage('Moderation thresholds saved.');
     } catch (saveError) { setError(saveError.message); }
   }
-  return <main className="page-content"><PageHeading eyebrow="Administration" title="System settings" description="Configure deterministic moderation thresholds for new article submissions." />
+  return <main className="page-content admin-page"><PageHeading eyebrow="Administration" title="System settings" description="Configure deterministic moderation thresholds for new article submissions." />
     <form className="section-card editor-form" onSubmit={save}><label>Maximum risk score for low-risk classification<input type="number" min="0" max="99" value={thresholds.autoApprove} onChange={(event) => setThresholds({ ...thresholds, autoApprove: event.target.value })} /></label><label>Maximum risk score before quarantine<input type="number" min="1" max="100" value={thresholds.review} onChange={(event) => setThresholds({ ...thresholds, review: event.target.value })} /></label><p className="muted-copy">These thresholds classify moderation risk only; every submission still requires administrator approval before publication. Scores above the review threshold are quarantined for closer review.</p>{error && <div className="error-panel inline-error">{error}</div>}{message && <p className="success-message">{message}</p>}<button className="primary-button" type="submit">Save settings</button></form>
   </main>;
 }
@@ -2261,7 +2422,7 @@ function AuditPage() {
   const [items, setItems] = useState([]);
   const [error, setError] = useState('');
   useEffect(() => { apiRequest('/moderation/audit').then((data) => setItems(data.items || [])).catch((loadError) => setError(loadError.message)); }, []);
-  return <main className="page-content"><PageHeading eyebrow="Administration" title="Audit history" description="Administrative and content workflow actions with actor, reason, and outcome." />
+  return <main className="page-content admin-page"><PageHeading eyebrow="Administration" title="Audit history" description="Administrative and content workflow actions with actor, reason, and outcome." />
     {error && <div className="page-panel error-panel">{error}</div>}
     <div className="table-wrap section-card"><table><thead><tr><th>When</th><th>Actor</th><th>Action</th><th>Target</th><th>Reason</th><th>Outcome</th></tr></thead><tbody>{items.map((item) => <tr key={item.id}><td>{new Date(item.createdAt).toLocaleString()}</td><td>{item.actorId}</td><td>{item.action}</td><td>{item.targetType} {item.targetId}</td><td>{item.reason}</td><td>{item.outcome}</td></tr>)}</tbody></table>{!items.length && <p className="muted-copy">No audit entries yet.</p>}</div>
   </main>;

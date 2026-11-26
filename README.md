@@ -77,7 +77,7 @@ The demo seed includes:
 - Author: `author@signalcms.dev` / `AuthorPass123!`
 - Reader: `reader@signalcms.dev` / `ReaderPass123!`
 
-To show and fill the demo Admin credentials on the login page, set `VITE_DEMO_ADMIN_EMAIL` and `VITE_DEMO_ADMIN_PASSWORD` in the ignored `frontend/.env.development.local` file. This convenience is available only in Vite development mode; do not set these variables for production builds.
+To show the development-only “Login as demo Admin” shortcut on the login page, set `VITE_DEMO_ADMIN_EMAIL` and `VITE_DEMO_ADMIN_PASSWORD` in the ignored `frontend/.env.development.local` file. The shortcut is available only in Vite development mode; production builds continue to require normal Admin credentials. Do not set these variables for production builds.
 
 Change or remove demo credentials before deploying the application to a shared or production environment.
 

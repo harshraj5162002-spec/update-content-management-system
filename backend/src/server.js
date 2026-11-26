@@ -79,8 +79,15 @@ app.use((error, req, res, next) => {
 async function start() {
   const connected = await connectDb();
   if (connected) await hydrateStore(store);
-  app.listen(port, () => {
+  const server = app.listen(port, () => {
     console.log(`Signal CMS API running on port ${port}`);
+  });
+  server.on('error', (error) => {
+    if (error.code === 'EADDRINUSE') {
+      console.error(`Port ${port} is already in use. Stop the other backend process before starting Signal CMS.`);
+      process.exit(1);
+    }
+    throw error;
   });
 }
 
